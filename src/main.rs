@@ -51,6 +51,19 @@ fn normalize_argv(args: Vec<String>) -> Vec<String> {
 }
 
 fn main() {
+    // A CLI must die quietly on SIGPIPE (`px search foo | head`), not panic.
+    // Rust ignores SIGPIPE by default, so writes fail with EPIPE and
+    // println! panics. Restore the default disposition.
+    #[cfg(unix)]
+    unsafe {
+        unsafe extern "C" {
+            fn signal(signum: i32, handler: usize) -> usize;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_DFL: usize = 0;
+        signal(SIGPIPE, SIG_DFL);
+    }
+
     let raw: Vec<String> = std::env::args().collect();
     let args = normalize_argv(raw);
     let cli = Cli::parse_from(args);
