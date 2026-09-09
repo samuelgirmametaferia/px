@@ -33,13 +33,15 @@ pub fn total_rx_bytes() -> Option<u64> {
 const NOISE_FLOOR_BPS: u64 = 4 * 1024;
 
 /// Watch network RX while an install runs and drive a progress bar.
+///
 /// - `Some(total)`: position = credited bytes, clamped at the known total
 ///   → a real percentage.
 /// - `None`: total unknown (AUR builds report no download size) → position
 ///   is an open-ended byte counter, so the bar visibly climbs during the
 ///   download instead of freezing until completion.
-/// Ambient traffic is discounted by the noise floor either way.
-/// Returns a handle; call `.abort()` when the install ends.
+///
+/// Ambient traffic is discounted by the noise floor either way. Returns a
+/// handle; call `.abort()` when the install ends.
 pub fn spawn_monitor(
     bar: indicatif::ProgressBar,
     total_bytes: Option<u64>,
