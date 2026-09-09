@@ -281,9 +281,8 @@ fn release_asset_selection() {
 #[test]
 fn unavailable_methods_are_filtered() {
     use px::universal::*;
-    // a tool that exists NOWHERE (ci runners have ruby/gem preinstalled,
-    // so a real tool name would be environment-dependent)
-    let absent = "px-definitely-not-a-real-tool-9f3a";
+    // brew is absent on both dev machines and CI runners (ubuntu-latest has
+    // no Homebrew); ruby/gem would be environment-dependent
     let candidates = vec![
         Candidate {
             method: Method::Brew { tap: "x/t".into() },
@@ -292,8 +291,8 @@ fn unavailable_methods_are_filtered() {
             pinned_sha: None,
         },
         Candidate {
-            method: Method::Pipx {
-                package: absent.into(),
+            method: Method::Brew {
+                tap: "y/t".into(),
             },
             confidence: 100,
             note: String::new(),
