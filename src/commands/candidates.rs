@@ -6,7 +6,7 @@
 use crate::app::App;
 use crate::error::{PxError, PxResult};
 
-const CANDIDATES_URL: &str = "https://raw.githubusercontent.com/samuelgirmametaferia/px/candidates/registry-candidates.jsonl";
+const CANDIDATES_URL: &str = "https://raw.githubusercontent.com/samuelgirmametaferia/px/candidates/candidates.jsonl";
 
 #[derive(serde::Deserialize)]
 struct Candidate {

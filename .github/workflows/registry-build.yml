@@ -34,6 +34,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 3. validate candidates in the disposable sandbox job
+      - name: Validate (container sandbox, no secrets, timeouts)
+        run: ./scripts/registry-validate.sh todo.jsonl validated.jsonl
+
+      # 4. incremental build: only changed shards are rebuilt
+      - name: Build changed shards
+        run: |
+          ./target/release/px-registry build \
+            --input <(cat registry-seed.jsonl validated.jsonl | sort -u) \
+            --out registry-out
+
       # 2b. publish the candidate list to the `candidates` branch so
       #     `px registry candidates` (and humans) can inspect what discovery
       #     found — committed, not lost in CI logs
@@ -52,17 +63,6 @@ jobs:
           else
             echo "no candidates found this run"
           fi
-
-      # 3. validate candidates in the disposable sandbox job
-      - name: Validate (container sandbox, no secrets, timeouts)
-        run: ./scripts/registry-validate.sh todo.jsonl validated.jsonl
-
-      # 4. incremental build: only changed shards are rebuilt
-      - name: Build changed shards
-        run: |
-          ./target/release/px-registry build \
-            --input <(cat registry-seed.jsonl validated.jsonl | sort -u) \
-            --out registry-out
 
       # 5. publish immutable blobs + attested root
       - name: Publish
