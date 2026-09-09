@@ -33,7 +33,7 @@ impl Default for Config {
             default_mode: "ask".into(),
             source_enabled: true,
             sandbox: "auto".into(),
-            upstream_registry: String::new(),
+            upstream_registry: "https://github.com/samuelgirmametaferia/px/releases/download/registry-v1".into(),
             telemetry_endpoint: String::new(),
             cache_search_secs: 3600,
         }

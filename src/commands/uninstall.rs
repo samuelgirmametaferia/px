@@ -159,6 +159,10 @@ async fn remove_universal(app: &App, spec: &str, method: &str) -> PxResult<()> {
         style.bold(spec),
         style.dim(&argv.join(" "))
     );
+    if app.cli.dry_run {
+        println!("  {} would run: {}", style.dim("[dry-run]"), argv.join(" "));
+        return Ok(());
+    }
     let pb = crate::ui::spinner::one(&format!("removing via {method}…"));
     let out = app.exec.run(&argv, crate::exec::RunOpts::default()).await?;
     if out.success() {

@@ -67,6 +67,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
 
     let mut exacts: Vec<PackageHit> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
+    let mut universal_handled = 0usize;
     for handle in handles {
         let (spec, resolution, pb) = handle.await.map_err(|e| PxError::User(e.to_string()))?;
         match resolution {
@@ -79,11 +80,16 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
             }
             Resolution::Candidates(candidates) => {
                 spinner::finish_warn(&pb, format!("{spec} → {} candidates", candidates.len()));
-                // A curated app match ("codex" = the OpenAI CLI) beats fuzzy
-                // package candidates (AUR's codex-app-electron-port-bin).
-                if crate::universal::registry::lookup(&spec).is_some() {
-                    spinner::finish_warn(&pb, format!("{spec} → known app, resolving project"));
+                // An EXACT identity match — curated app ("codex" = the OpenAI
+                // CLI) or upstream-registry record — beats any fuzzy package
+                // candidate (the AUR's codex-app-electron-port-bin for
+                // "codex", agentfs-bin for "agent").
+                let known_identity = crate::universal::registry::lookup(&spec).is_some()
+                    || registry_exact_hit(&app, &spec).await;
+                if known_identity {
+                    spinner::finish_warn(&pb, format!("{spec} → exact identity match, resolving project"));
                     if crate::universal::try_install(&app, &spec).await? {
+                        universal_handled += 1;
                         continue;
                     }
                 }
@@ -120,6 +126,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 // brew, verified npm, release binaries, installer scripts,
                 // and source builds — identity-checked, never name-matched.
                 if crate::universal::try_install(&app, &spec).await? {
+                    universal_handled += 1;
                     continue;
                 }
                 if near_misses.is_empty() {
@@ -158,7 +165,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     }
 
     if to_install.is_empty() {
-        if problems.is_empty() {
+        if problems.is_empty() && universal_handled == 0 {
             println!("{}", style.ok("nothing to do"));
         }
         for p in &problems {
@@ -439,4 +446,17 @@ pub async fn interactive(app: App) -> PxResult<()> {
             .collect::<Vec<_>>();
         run(app, &specs).await
     }
+}
+
+
+/// Does the upstream registry resolve this exact query? (Cheap: shards
+/// are cached after the first fetch.)
+async fn registry_exact_hit(app: &App, spec: &str) -> bool {
+    let Some(source) = crate::registry::source_from_config(&app.config) else {
+        return false;
+    };
+    matches!(
+        crate::registry::lookup(&app.client, &source, spec).await,
+        Ok(Some(rec)) if !rec.is_dead()
+    )
 }

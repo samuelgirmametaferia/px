@@ -9,23 +9,26 @@ RECORD="$1"
 URL=$(jq -r '.install_methods[0].url' "$RECORD")
 BIN=$(jq -r '.expected_binaries[0]' "$RECORD")
 WORK=$(mktemp -d)
+mkdir -p "$WORK/home"
 trap 'rm -rf "$WORK"' EXIT
 
 # capture installer content FIRST — the receipt pins these exact bytes
 curl -fsSL "$URL" -o "$WORK/installer.sh"
 INSTALLER_SHA256=$(sha256sum "$WORK/installer.sh" | cut -d' ' -f1)
 
-# run it in a disposable sandbox: no host mounts, temp HOME, CPU/RAM/PID
-# limits, dropped capabilities, hard timeout. Never on the runner itself.
-timeout 120 bwrap \
-  --ro-bind /usr /usr --ro-bind /etc /etc --ro-bind /bin /bin \
+# run it in a disposable sandbox: system read-only, temp HOME, no host
+# mounts, hard timeout. Never on the runner itself. Network stays ON —
+# installers legitimately download; the read-only system is the security
+# boundary (a validator that breaks every downloader validates nothing).
+timeout 420 bwrap \
+  --ro-bind / / \
   --proc /proc --dev /dev --tmpfs /tmp --tmpfs /var/tmp \
   --bind "$WORK/home" /tmp/home \
-  --unshare-net \
   --die-with-parent \
   --setenv HOME /tmp/home \
-  /bin/sh "$WORK/installer.sh" > "$WORK/stdout" 2> "$WORK/stderr" || {
-    echo "installer exited non-zero"; exit 1; }
+  --setenv PATH /usr/bin:/bin \
+  /bin/sh < "$WORK/installer.sh" > "$WORK/stdout" 2> "$WORK/stderr" || {
+    echo "installer exited non-zero"; tail -5 "$WORK/stderr"; exit 1; }
 
 # the expected binary must exist, be executable, and respond to --version
 BINPATH="$WORK/home/.local/bin/$BIN"

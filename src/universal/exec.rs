@@ -118,23 +118,49 @@ fn print_tail(argv: &[String], out: &crate::exec::ExecOutput) {
     }
 }
 
-/// Verify the expected binary now exists on PATH and executes.
+/// Verify the expected binary exists and executes. Checks PATH first,
+/// then the standard install locations language managers use
+/// (~/.cargo/bin, ~/.local/bin, ~/.deno/bin, go's bin dir, npm prefix) —
+/// a fresh install often isn't on the *current shell's* PATH yet.
 /// Returns its resolved path.
 pub async fn verify_binary(bin: &str) -> PxResult<String> {
-    let path = which::which(bin)
-        .map_err(|_| PxError::User(format!("'{bin}' not found on PATH after install")))?;
+    let candidates: Vec<std::path::PathBuf> = if let Ok(path) = which::which(bin) {
+        vec![path]
+    } else {
+        let home = dirs::home_dir().unwrap_or_default();
+        [
+            home.join(".cargo/bin"),
+            home.join(".local/bin"),
+            home.join(".deno/bin"),
+            home.join("go/bin"),
+            home.join(".npm-global/bin"),
+        ]
+        .iter()
+        .map(|d| d.join(bin))
+        .filter(|p| p.exists())
+        .collect()
+    };
+    let Some(path) = candidates.first() else {
+        return Err(PxError::User(format!(
+            "'{bin}' not found on PATH or in standard install locations"
+        )));
+    };
     // does it run? (some binaries need args; --version is the convention)
-    let out = tokio::process::Command::new(&path)
+    let out = tokio::process::Command::new(path)
         .arg("--version")
         .output()
         .await;
-    match out {
-        Ok(o) if o.status.success() => Ok(path.to_string_lossy().into_owned()),
-        Ok(_) => Ok(path.to_string_lossy().into_owned()), // exists+runs; --version unsupported is fine
-        Err(e) => Err(PxError::User(format!(
-            "'{bin}' exists but cannot execute: {e}"
-        ))),
+    let runs = out
+        .as_ref()
+        .map(|o| o.status.success() || path.exists())
+        .unwrap_or(false);
+    if !runs {
+        return Err(PxError::User(format!(
+            "'{}' exists but cannot execute",
+            path.display()
+        )));
     }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Source build through the existing github module, sandboxed.
