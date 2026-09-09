@@ -396,3 +396,74 @@ fn dead_tombstone_refuses_resolution() {
         "dead records must be refused with the tombstone explained: {combined}"
     );
 }
+
+/// The user scenario: a method fails (installer 503 / unreachable) → px
+/// ANNOUNCES the failure with its reason and automatically falls back to
+/// the next provider, then verifies the app actually installed.
+#[test]
+fn failed_method_announces_and_falls_back() {
+    use sha2::{Digest, Sha256};
+    // live server for the fallback installer
+    let (port, _server) = serve(FAKE_INSTALLER.as_bytes());
+    let live_url = format!("http://127.0.0.1:{port}/install.sh");
+    // record: method 0 = script at an unreachable URL, method 1 = pipx
+    let record = serde_json::json!({
+        "canonical_id": "github:px-test/pxfake-fallback",
+        "aliases": ["pxfake-fallback"],
+        "repository": "https://github.com/px-test/pxfake-fallback",
+        "description": "fallback verification package",
+        "expected_binaries": ["pxfake-e2e"],
+        "install_methods": [
+            // method 0: an unreachable installer (the raw.githubusercontent
+            // 503 case) — same rank as the live one, so it stays first
+            {"method": "script", "url": "http://127.0.0.1:1/install.sh",
+             "installer_sha256": format!("{:x}", Sha256::digest(b"irrelevant"))},
+            {"method": "script", "url": live_url,
+             "installer_sha256": format!("{:x}", Sha256::digest(FAKE_INSTALLER.as_bytes()))}
+        ],
+        "identity_confidence": 95,
+        "security_state": "validated",
+    })
+    .to_string();
+    let n = DIR_N.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("px-fb-reg-{n}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("apps.jsonl"), record).unwrap();
+    let out = dir.join("registry");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_px-registry"))
+        .args([
+            "build",
+            "--input",
+            dir.join("apps.jsonl").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+
+    let env = Env::new(&out);
+    let (code, stdout, stderr) = env.run(&["-y", "install", "pxfake-fallback"]);
+    let combined = format!("{stdout}{stderr}");
+
+    // the install must succeed via the FALLBACK
+    assert_eq!(code, 0, "fallback must succeed\n{combined}");
+    // the failure is ANNOUNCED with its reason
+    assert!(
+        combined.contains("installer") && combined.contains("⚠"),
+        "the failed method must be announced: {combined}"
+    );
+    // ...and the fallback is explained
+    assert!(
+        combined.contains("falling back to installer"),
+        "the fallback must be announced with the next provider: {combined}"
+    );
+    // the app is verified installed by the FALLBACK method
+    assert!(
+        combined.contains("binary: pxfake-e2e"),
+        "post-install verification must pass: {combined}"
+    );
+    let bin = env.home.join(".local/bin/pxfake-e2e");
+    assert!(bin.exists(), "the binary must actually exist");
+}

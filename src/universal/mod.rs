@@ -684,156 +684,284 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
         }
     }
 
-    // Scripts and source builds run the static sandbox scan first.
-    if let Method::Script { url } = &chosen.method {
-        // Registry-pinned installers: the content hash is a contract. If
-        // the live URL serves different bytes, STOP — never silently
-        // execute changed installer content.
-        if let Some(pinned) = chosen_pinned_sha(&chosen) {
-            let bytes = app
-                .client
-                .get(url)
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await?;
-            use sha2::{Digest, Sha256};
-            let actual = format!("{:x}", Sha256::digest(&bytes));
-            if actual != pinned {
-                println!(
-                    "\n    {} installer content CHANGED since validation",
-                    style.err("✘")
-                );
-                println!("    {} pinned  {pinned}", style.dim("·"));
-                println!("    {} actual  {actual}", style.dim("·"));
-                println!(
-                    "    {} refusing to install — the registry validated different bytes",
-                    style.dim("·")
-                );
-                crate::registry::telemetry::report_failure(
-                    &project.canonical,
-                    &chosen.method.label(),
-                    0,
-                    "hash_mismatch",
-                    None,
-                    url,
-                );
-                return Err(PxError::User(format!(
-                    "installer for {spec} changed since registry validation — refusing"
-                )));
-            }
+    // Attempt the chosen method; on failure, announce WHY and fall back
+    // through the remaining candidates. A security stop (hash mismatch,
+    // dangerous installer) never falls through — only ordinary failures do.
+    let mut ordered: Vec<&Candidate> = vec![&chosen];
+    ordered.extend(
+        candidates
+            .iter()
+            .filter(|c| c.method.label() != chosen.method.label()),
+    );
+
+    let mut binary: Option<String> = None;
+    let mut verified_path: Option<String> = None;
+    let mut used_method: Option<Method> = None;
+    let mut failures: Vec<String> = Vec::new();
+    let mut library_deadend = false;
+    let mut declined = false;
+
+    for (i, candidate) in ordered.iter().enumerate() {
+        // after a library dead-end, further cargo/source attempts on the
+        // same library will fail identically — skip them
+        if library_deadend
+            && matches!(
+                candidate.method,
+                Method::Cargo { .. } | Method::Source { .. }
+            )
+        {
+            continue;
+        }
+        if i == 0 {
             println!(
-                "    {} installer sha256 matches the registry pin",
-                style.ok("✓")
+                "\n    {} installing via {}",
+                style.dim("→"),
+                candidate.method.label()
+            );
+        } else {
+            println!(
+                "\n    {} falling back to {} {}",
+                style.warn("↻"),
+                style.bold(&candidate.method.label()),
+                style.dim(&format!(
+                    "[{}/{}]",
+                    candidate.method.rank(),
+                    candidate.confidence
+                ))
             );
         }
-        let scan = crate::security::scan_remote_script(&app.client, url).await?;
-        match scan.verdict {
-            crate::security::Verdict::Dangerous => {
-                println!(
-                    "    {} installer failed the safety scan — refusing",
-                    style.err("✘")
-                );
-                for f in &scan.flags {
-                    println!("      {} {}", style.err("•"), f);
-                }
-                return Err(PxError::User(format!("installer for {spec} is unsafe")));
+        match attempt_method(app, candidate, &project, spec).await {
+            MethodOutcome::Success { binary: b, path } => {
+                binary = b;
+                verified_path = path;
+                used_method = Some(candidate.method.clone());
+                break;
             }
-            crate::security::Verdict::Suspicious => {
-                println!("    {} installer has warning signs:", style.warn("⚠"));
-                for f in &scan.flags {
-                    println!("      {} {}", style.warn("•"), f);
-                }
-                if crate::ui::interactive()
-                    && !crate::ui::prompt::confirm("run it in the sandbox anyway?", false)?
-                {
-                    println!("    {} skipped", style.dim("ok"));
-                    return Ok(true);
+            MethodOutcome::Failed { reason, library } => {
+                failures.push(format!("{}: {}", candidate.method.label(), reason));
+                if library {
+                    library_deadend = true;
+                    println!(
+                        "    {} the crate is a library, not an installable program",
+                        style.warn("⚠")
+                    );
+                } else {
+                    println!("    {} {}", style.warn("⚠"), style.dim(&shorten(&reason)));
                 }
             }
-            crate::security::Verdict::Clean => {
-                println!("    {} safety scan clean", style.ok("✓"));
+            MethodOutcome::Fatal(e) => return Err(e),
+            MethodOutcome::Declined => {
+                println!("    {} skipped", style.dim("ok"));
+                declined = true;
+                break;
             }
         }
     }
 
-    println!(
-        "\n    {} installing via {}",
-        style.dim("→"),
-        chosen.method.label()
-    );
-    let method_binary = match exec::execute(app, &chosen.method).await {
-        Ok(bin) => bin,
-        Err(first_err) => {
-            // A failed method is not a failed resolution — try the next
-            // candidate (release without linux assets → the README's npm
-            // method; a cargo crate that's a library → anything else).
-            let library_deadend = matches!(chosen.method, Method::Cargo { .. })
-                && format!("{first_err}").contains("nothing to install");
-            if library_deadend {
-                println!(
-                    "    {} crate is a library, not a program — trying the next method",
-                    style.warn("⚠")
-                );
-            } else {
-                println!(
-                    "    {} {} failed — trying the next method",
-                    style.warn("⚠"),
-                    chosen.method.label()
-                );
-            }
-            let mut result: Option<Option<String>> = None;
-            for next in candidates.iter() {
-                if next.method.label() == chosen.method.label() {
-                    continue;
-                }
-                // after a library dead-end, further cargo/source attempts
-                // on the same library will fail the same way
-                if library_deadend
-                    && matches!(next.method, Method::Cargo { .. } | Method::Source { .. })
-                {
-                    continue;
-                }
-                println!(
-                    "    {} installing via {}",
-                    style.dim("→"),
-                    next.method.label()
-                );
-                match exec::execute(app, &next.method).await {
-                    Ok(bin) => {
-                        result = Some(bin);
-                        break;
-                    }
-                    Err(e2) => {
-                        tracing::debug!("method {} failed: {e2}", next.method.label());
-                    }
-                }
-            }
-            // every method under this identity failed as a library →
-            // the same name on npm, WITH a repository link, is a
-            // verified identity of its own project (http-server the
-            // Rust lib vs http-party/http-server the CLI)
-            if result.is_none() && library_deadend {
-                result = npm_library_fallback(app, spec, &project).await?;
-            }
-            match result {
-                Some(bin) => bin,
-                None => return Err(first_err),
-            }
+    if used_method.is_none() && !declined {
+        // every method under this identity failed as a library → the same
+        // name on npm, WITH its own repository link, is a verified identity
+        // of a different project (http-server the lib vs the CLI)
+        if library_deadend && let Some(bin) = npm_library_fallback(app, spec, &project).await? {
+            binary = bin;
+            used_method = Some(Method::Npm {
+                package: spec.to_string(),
+            });
         }
-    };
-    // the registry knows the real executable name (package ≠ binary);
-    // it beats the method's guess (cargo installs `agent`, not `agent-code`)
-    let binary = project.binary.clone().or(method_binary);
+        if used_method.is_none() {
+            // announce every failure, not just the first
+            println!("\n    {} every install method failed:", style.err("✘"));
+            for f in &failures {
+                println!("      {} {}", style.err("•"), f);
+            }
+            return Err(PxError::User(format!(
+                "no install method for {spec} succeeded ({} failed)",
+                failures.len()
+            )));
+        }
+    }
+    if declined {
+        return Ok(true);
+    }
+
+    let chosen_for_ledger = used_method.unwrap_or_else(|| chosen.method.clone());
     println!(
         "    {} installed via {}",
         style.ok("✔"),
-        chosen.method.label()
+        chosen_for_ledger.label()
     );
 
-    // Package name ≠ executable name: verify the binary exists and runs.
-    let mut verified_path: Option<String> = None;
+    // Record the install with full identity for remove/update.
+    if !app.cli.dry_run {
+        let mut ledger = crate::ledger::Ledger::load();
+        ledger.record_universal(
+            spec,
+            &project.canonical,
+            &chosen_for_ledger,
+            binary.as_deref(),
+            verified_path.as_deref(),
+        );
+        ledger.save();
+    }
+    Ok(true)
+}
+
+/// The result of attempting ONE install method.
+enum MethodOutcome {
+    /// Worked. binary = the name it installed (project's known binary
+    /// preferred), path = the verified executable path when verifiable.
+    Success {
+        binary: Option<String>,
+        path: Option<String>,
+    },
+    /// Failed for an ordinary reason (network, missing asset, empty
+    /// package) — the caller may fall back to the next candidate.
+    Failed { reason: String, library: bool },
+    /// Security stop (hash mismatch, dangerous scan) — never falls through.
+    Fatal(PxError),
+    /// The user declined a confirmation; stop without installing.
+    Declined,
+}
+
+/// Shorten an error for the announcement line (first line, capped).
+fn shorten(reason: &str) -> String {
+    let first = reason.lines().next().unwrap_or(reason);
+    if first.len() > 110 {
+        format!("{}…", &first[..110])
+    } else {
+        first.to_string()
+    }
+}
+
+/// Attempt ONE candidate end to end: pinned-hash check → safety scan →
+/// execute → verify the app actually installed. Every failure that isn't a
+/// security stop is a `Failed` the caller can fall back from.
+async fn attempt_method(
+    app: &App,
+    candidate: &Candidate,
+    project: &Project,
+    spec: &str,
+) -> MethodOutcome {
+    let style = &app.style;
+
+    // scripts: pinned-hash contract, then the static safety scan
+    if let Method::Script { url } = &candidate.method {
+        // Registry-pinned installers: the content hash is a contract. If
+        // the live URL serves different bytes, STOP — never silently
+        // execute changed installer content. This is a Fatal, not Failed.
+        if let Some(pinned) = &candidate.pinned_sha {
+            match app.client.get(url).send().await {
+                Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                    Ok(bytes) => {
+                        use sha2::{Digest, Sha256};
+                        let actual = format!("{:x}", Sha256::digest(&bytes));
+                        if actual != *pinned {
+                            println!(
+                                "\n    {} installer content CHANGED since validation",
+                                style.err("✘")
+                            );
+                            println!("    {} pinned  {pinned}", style.dim("·"));
+                            println!("    {} actual  {actual}", style.dim("·"));
+                            crate::registry::telemetry::report_failure(
+                                &project.canonical,
+                                &candidate.method.label(),
+                                0,
+                                "hash_mismatch",
+                                None,
+                                url,
+                            );
+                            return MethodOutcome::Fatal(PxError::User(format!(
+                                "installer for {spec} changed since registry validation — refusing"
+                            )));
+                        }
+                        println!(
+                            "    {} installer sha256 matches the registry pin",
+                            style.ok("✓")
+                        );
+                    }
+                    Err(e) => {
+                        return MethodOutcome::Failed {
+                            reason: format!("could not read installer: {e}"),
+                            library: false,
+                        };
+                    }
+                },
+                Ok(resp) => {
+                    return MethodOutcome::Failed {
+                        reason: format!("installer fetch returned HTTP {}", resp.status()),
+                        library: false,
+                    };
+                }
+                Err(e) => {
+                    return MethodOutcome::Failed {
+                        reason: format!("installer unreachable: {e}"),
+                        library: false,
+                    };
+                }
+            }
+        }
+        // the scan itself: network failure = Failed (fall back); a
+        // dangerous verdict = Fatal (never fall through to it)
+        match crate::security::scan_remote_script(&app.client, url).await {
+            Ok(scan) => match scan.verdict {
+                crate::security::Verdict::Dangerous => {
+                    println!(
+                        "    {} installer failed the safety scan — refusing",
+                        style.err("✘")
+                    );
+                    for f in &scan.flags {
+                        println!("      {} {}", style.err("•"), f);
+                    }
+                    return MethodOutcome::Fatal(PxError::User(format!(
+                        "installer for {spec} is unsafe"
+                    )));
+                }
+                crate::security::Verdict::Suspicious => {
+                    println!("    {} installer has warning signs:", style.warn("⚠"));
+                    for f in &scan.flags {
+                        println!("      {} {}", style.warn("•"), f);
+                    }
+                    if crate::ui::interactive()
+                        && !crate::ui::prompt::confirm("run it in the sandbox anyway?", false)
+                            .unwrap_or(false)
+                    {
+                        return MethodOutcome::Declined;
+                    }
+                }
+                crate::security::Verdict::Clean => {
+                    println!("    {} safety scan clean", style.ok("✓"));
+                }
+            },
+            Err(e) => {
+                return MethodOutcome::Failed {
+                    reason: format!("could not fetch installer for scanning: {e}"),
+                    library: false,
+                };
+            }
+        }
+    }
+
+    // execute
+    let method_binary = match exec::execute(app, &candidate.method).await {
+        Ok(bin) => bin,
+        Err(e) => {
+            let msg = format!("{e}");
+            let library = matches!(candidate.method, Method::Cargo { .. })
+                && msg.contains("nothing to install");
+            return MethodOutcome::Failed {
+                reason: msg,
+                library,
+            };
+        }
+    };
+
+    // the registry knows the real executable name (package ≠ binary); it
+    // beats the method's guess (cargo installs `agent`, not `agent-code`)
+    let binary = project.binary.clone().or(method_binary);
+
+    // CHECK THE APP ACTUALLY INSTALLED: the binary must exist and run. A
+    // method that claims success but leaves no working binary is a Failed —
+    // the caller falls back to the next method.
     if let Some(bin) = &binary {
         match exec::verify_binary(bin).await {
             Ok(path) => {
@@ -843,30 +971,22 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
                     style.bold(bin),
                     style.dim(&path)
                 );
-                verified_path = Some(path);
+                return MethodOutcome::Success {
+                    binary: Some(bin.clone()),
+                    path: Some(path),
+                };
             }
             Err(e) => {
-                println!(
-                    "    {} expected binary '{bin}' not runnable: {e}",
-                    style.warn("⚠")
-                );
+                return MethodOutcome::Failed {
+                    reason: format!(
+                        "method succeeded but the expected binary '{bin}' is not runnable: {e}"
+                    ),
+                    library: false,
+                };
             }
         }
     }
-
-    // Record the install with full identity for remove/update.
-    if !app.cli.dry_run {
-        let mut ledger = crate::ledger::Ledger::load();
-        ledger.record_universal(
-            spec,
-            &project.canonical,
-            &chosen.method,
-            binary.as_deref(),
-            verified_path.as_deref(),
-        );
-        ledger.save();
-    }
-    Ok(true)
+    MethodOutcome::Success { binary, path: None }
 }
 
 /// Run an upstream installer script inside the sandbox with a time limit.
@@ -910,11 +1030,6 @@ pub async fn exec_script_sandboxed(app: &App, url: &str) -> PxResult<()> {
     } else {
         Err(PxError::User(format!("installer script failed: {url}")))
     }
-}
-
-/// Pinned installer sha256 for a candidate, when the registry recorded one.
-fn chosen_pinned_sha(c: &Candidate) -> Option<String> {
-    c.pinned_sha.clone()
 }
 
 /// After a library dead-end under the crates.io identity: the same name on

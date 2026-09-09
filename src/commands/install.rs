@@ -135,6 +135,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 }
                 if near_misses.is_empty() {
                     problems.push(format!("{spec}: not found in any source"));
+                    // demand-driven discovery: report the miss (hashed,
+                    // local queue, only sent when an endpoint is configured)
+                    crate::registry::telemetry::report_unresolved(&spec);
                 } else {
                     problems.push(format!(
                         "{spec}: not found — did you mean {}?",

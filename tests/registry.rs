@@ -263,3 +263,23 @@ fn shard_codec_roundtrip_and_binary_search() {
     let absent = registry::alias_key("not-there");
     assert!(registry::shard_find(&decoded, &absent).is_none());
 }
+
+#[test]
+fn unresolved_reports_never_contain_the_raw_query() {
+    let path = px::registry::telemetry::unresolved_path();
+    let _ = std::fs::remove_file(&path);
+    px::registry::telemetry::report_unresolved("My Super Secret Project Name");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !content.contains("secret") && !content.contains("Super"),
+        "raw query must never be stored: {content}"
+    );
+    let report: px::registry::telemetry::UnresolvedReport =
+        serde_json::from_str(content.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        report.query_hash.len(),
+        64,
+        "BLAKE3 hex of the normalized query"
+    );
+    let _ = std::fs::remove_file(&path);
+}

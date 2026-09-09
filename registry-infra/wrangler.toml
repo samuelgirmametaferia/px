@@ -1,0 +1,14 @@
+# wrangler config for the px telemetry worker.
+# Deploy:  cd registry-infra && wrangler deploy
+# Requires: `wrangler d1 create px-reports` first, then paste the database_id
+# below, and `wrangler secret put REPORTS_TOKEN`.
+
+name = "px-reports"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "px-reports"
+# paste from: wrangler d1 create px-reports
+database_id = "PASTE_YOUR_D1_DATABASE_ID"

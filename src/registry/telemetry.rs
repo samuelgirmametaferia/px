@@ -19,8 +19,21 @@ pub struct FailureReport {
     pub timestamp_bucket: String, // hour-precision, e.g. "2026-09-09T14"
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnresolvedReport {
+    /// BLAKE3 of the normalized query — the raw query is NEVER stored or
+    /// sent. Demand-driven discovery counts hashes; nothing identifies
+    /// the user.
+    pub query_hash: String,
+    pub timestamp_bucket: String,
+}
+
 pub fn report_path() -> PathBuf {
     crate::registry::cache_dir().join("reports.jsonl")
+}
+
+pub fn unresolved_path() -> PathBuf {
+    crate::registry::cache_dir().join("unresolved.jsonl")
 }
 
 /// Enqueue a failure report locally. Never blocks, never fails the install.
@@ -33,6 +46,36 @@ pub fn enqueue(report: FailureReport) {
         if lines > 500 {
             let _ = std::fs::remove_file(&path);
         }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        if let Ok(json) = serde_json::to_string(&report) {
+            let _ = writeln!(f, "{json}");
+        }
+    }
+}
+
+/// Report an unresolved query (px couldn't find the thing anywhere).
+/// Hashed locally; only the hash ever leaves the machine, and only when an
+/// endpoint is configured.
+pub fn report_unresolved(query: &str) {
+    let norm = crate::registry::normalize_alias(query);
+    let mut h = blake3::Hasher::new();
+    h.update(norm.as_bytes());
+    let report = UnresolvedReport {
+        query_hash: h.finalize().to_hex().to_string(),
+        timestamp_bucket: chrono::Utc::now().format("%Y-%m-%dT%H").to_string(),
+    };
+    let path = unresolved_path();
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&PathBuf::from(".")));
+    if let Ok(existing) = std::fs::read_to_string(&path)
+        && existing.lines().count() > 500
+    {
+        let _ = std::fs::remove_file(&path);
     }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -96,6 +139,33 @@ pub async fn flush(client: &reqwest::Client, endpoint: &str) -> PxResultFlush {
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await;
+    // unresolved queries ride along to the sibling endpoint (best effort)
+    let unresolved_file = unresolved_path();
+    if let Ok(existing) = std::fs::read_to_string(&unresolved_file) {
+        let queries: Vec<UnresolvedReport> = existing
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        if !queries.is_empty() {
+            #[derive(Serialize)]
+            struct UnresolvedBatch {
+                queries: Vec<UnresolvedReport>,
+            }
+            let base = endpoint.trim_end_matches("/v1/report");
+            let _ = client
+                .post(format!("{base}/v1/unresolved"))
+                .json(&UnresolvedBatch { queries })
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .map(|ok| {
+                    if ok {
+                        let _ = std::fs::remove_file(&unresolved_file);
+                    }
+                });
+        }
+    }
     match resp {
         Ok(r) if r.status().is_success() => {
             // sent reports are consumed; failures stay queued for retry
