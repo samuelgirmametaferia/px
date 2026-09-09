@@ -45,21 +45,21 @@ jobs:
             --input <(cat registry-seed.jsonl validated.jsonl | sort -u) \
             --out registry-out
 
-      # 2b. publish the candidate list to the `candidates` branch so
-      #     `px registry candidates` (and humans) can inspect what discovery
-      #     found — committed, not lost in CI logs
+      # 2c. publish the candidate list to the `candidates` branch — using a
+      #     TEMP git index so the working tree is never touched (the orphan
+      #     checkout previously deleted scripts/ out from under later steps)
       - name: Publish candidate list
         run: |
           if [ -s candidates.jsonl ]; then
-            git config user.name "px-registry-bot"
-            git config user.email "actions@github.com"
-            git checkout --orphan candidates || git checkout candidates
-            git rm -rf --quiet . || true
-            cp "$GITHUB_WORKSPACE/candidates.jsonl" . 2>/dev/null || true
             date -u +%FT%TZ > .last-discovery
+            export GIT_INDEX_FILE="$RUNNER_TEMP/candidates-index"
+            rm -f "$GIT_INDEX_FILE"
+            git read-tree --empty
             git add candidates.jsonl .last-discovery
-            git commit -qm "discovery candidates $(date -u +%FT%TZ)" || true
-            git push -q origin HEAD:candidates -f
+            tree=$(git write-tree)
+            commit=$(git commit-tree "$tree" -m "discovery candidates $(date -u +%FT%TZ)")
+            git push -q origin "$commit":refs/heads/candidates -f
+            echo "published $(wc -l < candidates.jsonl) candidates to the candidates branch"
           else
             echo "no candidates found this run"
           fi
