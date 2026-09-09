@@ -51,6 +51,28 @@ jobs:
       - name: Publish candidate list
         run: |
           if [ -s candidates.jsonl ]; then
+            # cumulative: merge with the previous run's candidate list so
+            # the branch answers "everything discovery has ever found"
+            curl -sf "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/candidates/candidates.jsonl" \
+              -o previous-candidates.jsonl 2>/dev/null || true
+            [ -s previous-candidates.jsonl ] && cat previous-candidates.jsonl >> candidates.jsonl
+            # dedupe by canonical_id (last occurrence wins)
+            python3 - <<'DEDUPE'
+import json, sys
+seen = {}
+for line in open("candidates.jsonl"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    seen[rec.get("canonical_id", "")] = line
+with open("candidates.jsonl", "w") as f:
+    for v in seen.values():
+        f.write(v + "\n")
+DEDUPE
             date -u +%FT%TZ > .last-discovery
             git config user.name "px-registry-bot"
             git config user.email "actions@github.com"
