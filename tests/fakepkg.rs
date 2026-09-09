@@ -291,9 +291,7 @@ fn unavailable_methods_are_filtered() {
             pinned_sha: None,
         },
         Candidate {
-            method: Method::Brew {
-                tap: "y/t".into(),
-            },
+            method: Method::Brew { tap: "y/t".into() },
             confidence: 100,
             note: String::new(),
             pinned_sha: None,
@@ -314,7 +312,11 @@ fn unavailable_methods_are_filtered() {
             .all(|c| !matches!(c.method, Method::Brew { .. } | Method::Pipx { .. })),
         "missing-tool methods must be filtered"
     );
-    assert!(ranked.iter().any(|c| matches!(c.method, Method::Cargo { .. })));
+    assert!(
+        ranked
+            .iter()
+            .any(|c| matches!(c.method, Method::Cargo { .. }))
+    );
 
     // ranking: method rank dominates confidence
     let ranked = rank_candidates(vec![
