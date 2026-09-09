@@ -799,7 +799,7 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
         println!(
             "\n    {} the command is {} — not {}",
             style.bold("▶"),
-            style.bold(&format!("{bin}")),
+            style.bold(&bin.to_string()),
             style.dim(spec)
         );
     }

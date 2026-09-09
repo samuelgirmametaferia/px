@@ -58,7 +58,7 @@ pub fn spawn_monitor(
             tokio::time::sleep(Duration::from_millis(300)).await;
             samples += 1;
             // long installs deserve fresh jokes: rotate every ~15s
-            if samples % 50 == 0 {
+            if samples.is_multiple_of(50) {
                 bar.set_message(crate::ui::jokes::next());
             }
             let Some(now) = total_rx_bytes() else {

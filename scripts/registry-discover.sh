@@ -8,18 +8,19 @@ set -euo pipefail
 # GitHub code search needs auth; the workflow runs with GITHUB_TOKEN.
 QUERY_PREFIX='curl -fsSL language:Shell pushed:>2026-08-01'
 
-# code search is hard rate-limited (429s burned the whole run before) —
-# ONE query per run, rotated by day-of-week, with a backoff retry
-QUERIES=("curl -fsSL | bash" "curl -fsSL | sh" "wget -qO- | sh")
+# repo search (NOT code search — the runner's app token gets silently
+# empty results from search/code, and 429s when pushed). search/repositories
+# works with GITHUB_TOKEN and supports in:readme. ONE rotated query per run.
+QUERIES=('"curl -fsSL | bash" in:readme' '"curl -fsSL | sh" in:readme' '"wget -qO- | sh" in:readme')
 q="${QUERIES[$(( $(date -u +%u) % ${#QUERIES[@]} ))]}"
-encoded=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$q $QUERY_PREFIX")
+encoded=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$q pushed:>2026-08-01")
 for attempt in 1 2; do
-  if gh api "search/code?q=$encoded" --paginate; then
+  if gh api "search/repositories?q=$encoded&sort=updated&per_page=30"; then
     break
   fi
-  echo "search 429'd (attempt $attempt), backing off 30s" >&2
+  echo "search failed (attempt $attempt), backing off 30s" >&2
   sleep 30
-done | jq -r '.items[]? | .repository.full_name' | sort -u | while read -r repo; do
+done | jq -r '.items[]? | .full_name' | sort -u | while read -r repo; do
   # only repos whose README also documents an installer — strong evidence
   readme=$(gh api "repos/$repo/readme" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || {
     echo "no readme: $repo" >&2
