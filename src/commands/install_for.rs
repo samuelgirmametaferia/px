@@ -163,7 +163,7 @@ pub async fn run(app: App, path: &str) -> PxResult<()> {
     // ---- confirm -----------------------------------------------------------------
     if !app.cli.yes
         && !app.cli.dry_run
-        && !crate::ui::prompt::confirm("install these system packages?", false)?
+        && !crate::ui::prompt::confirm("install these system packages?", true)?
     {
         return Err(PxError::Cancelled);
     }

@@ -201,7 +201,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     println!("{}", crate::ui::table::panel("install plan", &plan, width));
     println!();
 
-    if !app.cli.yes && !app.cli.dry_run && !crate::ui::prompt::confirm("proceed?", false)? {
+    if !app.cli.yes && !app.cli.dry_run && !crate::ui::prompt::confirm("proceed?", true)? {
         return Err(PxError::Cancelled);
     }
 

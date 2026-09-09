@@ -283,3 +283,31 @@ fn unresolved_reports_never_contain_the_raw_query() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// A stale cached root (registry republished with new shard hashes) must
+/// not poison lookups: shard verification failure triggers a root refresh
+/// and retry instead of falling through to nothing.
+#[test]
+fn stale_root_triggers_refresh_not_failure() {
+    let reg1 = build_registry(&[record("stale/app", &["staleapp"], 100, "validated")]);
+    // populate the cache against reg1's root
+    let _ = lookup(&reg1, "staleapp").expect("first lookup works");
+
+    // republish: same app, rebuilt shards (different hashes), SAME cache dir
+    let reg2 = build_registry(&[record("stale/app", &["staleapp"], 100, "validated")]);
+    // reg2's shards differ by generated_at → different blake3 → the cached
+    // root from reg1 now pins hashes that fail verification
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = reqwest::Client::new();
+    let result = rt.block_on(registry::lookup(
+        &client,
+        &registry::RegistrySource::Dir(reg2.clone()),
+        "staleapp",
+    ));
+    // the stale root must be detected, refreshed against reg2, and resolve
+    assert!(
+        matches!(&result, Ok(Some(r)) if r.canonical_id == "github:stale/app"),
+        "stale root must refresh and resolve, got: {result:?}"
+    );
+    let _ = std::fs::remove_dir_all(registry::cache_dir());
+}

@@ -41,7 +41,7 @@ pub async fn run(app: App) -> PxResult<()> {
     };
     println!("  {} {shown}{more}", style.dim("→"));
 
-    if !app.cli.yes && !app.cli.dry_run && !crate::ui::prompt::confirm("upgrade now?", false)? {
+    if !app.cli.yes && !app.cli.dry_run && !crate::ui::prompt::confirm("upgrade now?", true)? {
         return Err(PxError::Cancelled);
     }
 

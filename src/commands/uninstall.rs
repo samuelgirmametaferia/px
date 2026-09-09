@@ -63,7 +63,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         }
         if !app.cli.yes
             && !app.cli.dry_run
-            && !crate::ui::prompt::confirm("remove these packages?", false)?
+            && !crate::ui::prompt::confirm("remove these packages?", true)?
         {
             return Err(PxError::Cancelled);
         }

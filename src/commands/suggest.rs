@@ -153,7 +153,7 @@ pub async fn run(app: App) -> PxResult<()> {
             style.bold(&chosen.join(", ")),
             style.bold(&crate::maintenance::human_size(freed))
         );
-        if !crate::ui::prompt::confirm("proceed?", false)? {
+        if !crate::ui::prompt::confirm("proceed?", true)? {
             return Err(PxError::Cancelled);
         }
     }

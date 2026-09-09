@@ -240,13 +240,18 @@ async fn fetch_shard(
     source: &RegistrySource,
     info: &ShardInfo,
     namespace: &str, // "alias" | "app"
+    bust_cache: bool,
 ) -> PxResult<Vec<u8>> {
     // cache hit?
     let cache_path = cache_dir().join(format!("{namespace}-{}.cbor.zst", info.shard));
-    if let Ok(bytes) = std::fs::read(&cache_path)
+    if !bust_cache
+        && let Ok(bytes) = std::fs::read(&cache_path)
         && blake3_hex(&bytes) == info.blake3
     {
         return Ok(bytes);
+    }
+    if bust_cache {
+        let _ = std::fs::remove_file(&cache_path);
     }
     let bytes = match source {
         RegistrySource::Dir(_) => fetch(client, source, &shard_name(namespace, info.shard)).await?,
@@ -285,13 +290,30 @@ fn blake3_hex(bytes: &[u8]) -> String {
 }
 
 /// Full lookup: query → normalized alias → alias shard → app shard →
-/// record. Two shard fetches maximum, both cached.
+/// record. Two shard fetches maximum, both cached. A stale cached root
+/// (registry republished underneath us) fails shard verification — that
+/// force-refreshes the root and retries once instead of erroring out.
 pub async fn lookup(
     client: &reqwest::Client,
     source: &RegistrySource,
     query: &str,
 ) -> PxResult<Option<schema::RegistryRecord>> {
-    let root = load_root(client, source, false).await?;
+    match lookup_with_root(client, source, query, false).await {
+        Err(e) if format!("{e}").contains("FAILED verification") => {
+            tracing::debug!("stale root suspected, refreshing and retrying");
+            lookup_with_root(client, source, query, true).await
+        }
+        other => other,
+    }
+}
+
+async fn lookup_with_root(
+    client: &reqwest::Client,
+    source: &RegistrySource,
+    query: &str,
+    refresh_root: bool,
+) -> PxResult<Option<schema::RegistryRecord>> {
+    let root = load_root(client, source, refresh_root).await?;
     let akey = alias_key(query);
     let ashard_id = shard_of(&akey);
 
@@ -299,7 +321,7 @@ pub async fn lookup(
     let Some(info) = root.alias_shards.iter().find(|s| s.shard == ashard_id) else {
         return Ok(None); // empty shard — nothing with this alias
     };
-    let bytes = fetch_shard(client, source, info, "alias").await?;
+    let bytes = fetch_shard(client, source, info, "alias", refresh_root).await?;
     let shard: Shard<AliasEntry> = decode_shard(&bytes)?;
     let Some(entry) = shard_find(&shard, &akey) else {
         return Ok(None);
@@ -310,7 +332,7 @@ pub async fn lookup(
     let Some(app_info) = root.app_shards.iter().find(|s| s.shard == app_shard_id) else {
         return Ok(None);
     };
-    let bytes = fetch_shard(client, source, app_info, "app").await?;
+    let bytes = fetch_shard(client, source, app_info, "app", refresh_root).await?;
     let shard: Shard<schema::AppEntry> = decode_shard(&bytes)?;
     Ok(shard_find(&shard, &entry.app_key).map(|e| e.record.clone()))
 }

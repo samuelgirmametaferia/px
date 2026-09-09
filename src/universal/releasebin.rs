@@ -147,14 +147,33 @@ pub async fn install(app: &App, repo: &str) -> PxResult<Option<String>> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| PxError::User(format!("cannot create release cache: {e}")))?;
     let archive_path = dir.join(&asset.name);
-    let bytes = app
+    // stream with a live speed bar — the user always sees bytes/second
+    let mut resp = app
         .client
         .get(&asset.url)
         .send()
         .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+        .error_for_status()?;
+    let total = resp.content_length();
+    let bar = match total {
+        Some(t) => crate::ui::progress::bytes_bar(
+            crate::ui::progress::BarStyle::parse(&app.cli.bar)
+                .unwrap_or(crate::ui::progress::BarStyle::Shades),
+            t,
+            &format!("downloading {}", asset.name),
+        ),
+        None => crate::ui::progress::flow_bar(
+            crate::ui::progress::BarStyle::parse(&app.cli.bar)
+                .unwrap_or(crate::ui::progress::BarStyle::Shades),
+            &format!("downloading {}", asset.name),
+        ),
+    };
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        bytes.extend_from_slice(&chunk);
+        bar.inc(chunk.len() as u64);
+    }
+    bar.finish_and_clear();
     std::fs::write(&archive_path, &bytes)
         .map_err(|e| PxError::User(format!("cannot write archive: {e}")))?;
 
