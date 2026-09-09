@@ -46,7 +46,11 @@ fn overlong_lines_are_truncated_not_overflowing() {
         widths.iter().all(|w| *w == widths[0]),
         "overlong line broke the box: {widths:?}"
     );
-    assert!(widths[0] <= 84, "box should stay ~80 wide, got {}", widths[0]);
+    assert!(
+        widths[0] <= 84,
+        "box should stay ~80 wide, got {}",
+        widths[0]
+    );
 }
 
 #[test]

@@ -12,6 +12,7 @@ use crate::ui::spinner::{self, Spinners};
 
 pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     crate::backend::elevate::refuse_root()?;
+    let started = std::time::Instant::now();
     let style = &app.style;
 
     println!("{}", style.banner());
@@ -286,8 +287,32 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     for f in &failures {
         println!("{} {}", style.err("✘"), f);
     }
+
+    // Summary stats: what happened, through which sources, how long.
+    let installed_count: usize = to_install.len() - failures.len();
+    let per_source = by_source
+        .iter()
+        .map(|(s, p)| format!("{s} {}", p.len()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    println!(
+        "\n{} {} installed{} · {} already present · {} failed · {:.1}s",
+        if failures.is_empty() {
+            style.ok("✔")
+        } else {
+            style.warn("⚠")
+        },
+        installed_count,
+        if per_source.is_empty() {
+            String::new()
+        } else {
+            format!(" ({per_source})")
+        },
+        already.len(),
+        failures.len(),
+        started.elapsed().as_secs_f64()
+    );
     if failures.is_empty() {
-        println!("{}", style.ok("done"));
         Ok(())
     } else {
         Err(PxError::User(failures.join("; ")))

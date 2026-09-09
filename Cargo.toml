@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # UX
 indicatif = "0.18"
 dialoguer = "0.11"
+console = "0.15"
 owo-colors = "4"
 comfy-table = "7"
 

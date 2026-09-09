@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub async fn run(app: App, term: &str) -> PxResult<()> {
     let style = &app.style;
+    let started = std::time::Instant::now();
     println!("{}", style.banner());
 
     let providers = app.providers();
@@ -29,6 +30,7 @@ pub async fn run(app: App, term: &str) -> PxResult<()> {
     }
 
     let mut all = Vec::new();
+    let mut per_source: Vec<(String, usize)> = Vec::new();
     for h in handles {
         let (p, hits, pb) = h.await.expect("search task panicked");
         let label = p.label().to_string();
@@ -37,6 +39,7 @@ pub async fn run(app: App, term: &str) -> PxResult<()> {
         } else {
             crate::ui::spinner::finish_ok(&pb, format!("{label}: {} matches", hits.len()));
         }
+        per_source.push((label, hits.len()));
         all.extend(hits);
     }
 
@@ -47,7 +50,7 @@ pub async fn run(app: App, term: &str) -> PxResult<()> {
     }
     all.sort_by_key(|h| std::cmp::Reverse(h.score));
     all.dedup_by(|a, b| a.name == b.name);
-    all.truncate(30);
+    // everything is shown — the table wraps to the terminal, not to a cap
 
     if all.is_empty() {
         // Nothing matched the full term — build a did-you-mean pool with
@@ -95,5 +98,24 @@ pub async fn run(app: App, term: &str) -> PxResult<()> {
 
     println!();
     println!("{}", crate::ui::table::hits_table(style, &all));
+
+    // Stats footer: totals, per-source breakdown, wall time.
+    let breakdown = per_source
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(label, n)| format!("{label} {n}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    println!(
+        "\n{} {} result(s) · {} · {:.1}s",
+        style.dim("·"),
+        all.len(),
+        if breakdown.is_empty() {
+            "no source matched".to_string()
+        } else {
+            breakdown
+        },
+        started.elapsed().as_secs_f64()
+    );
     Ok(())
 }

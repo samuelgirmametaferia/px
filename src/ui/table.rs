@@ -1,23 +1,53 @@
-use comfy_table::{Table, presets::UTF8_FULL};
+use comfy_table::{Cell, Color, ContentArrangement, Table, presets::UTF8_FULL};
 
 use crate::backend::PackageHit;
 
-/// Shared table preset for search results and install plans.
+/// Map a source id to its palette color (the same mapping ui::style uses).
+fn source_color(source: &str) -> Option<Color> {
+    match source {
+        "repo" | "pacman" | "apt" | "dnf" | "zypper" => Some(Color::Green),
+        "aur" | "paru" | "yay" => Some(Color::Magenta),
+        "github" | "source" | "app" => Some(Color::Yellow),
+        _ => None,
+    }
+}
+
+fn styled_cell(text: &str, color: Option<Color>, colors_on: bool) -> Cell {
+    if colors_on {
+        let mut cell = Cell::new(text);
+        if let Some(c) = color {
+            cell = cell.fg(c);
+        }
+        cell
+    } else {
+        Cell::new(text)
+    }
+}
+
+/// Search results table. Scales to the terminal: comfy-table's dynamic
+/// arrangement gives columns their natural width when there's room and
+/// WRAPS content when there isn't — full descriptions are always shown,
+/// never chopped to a fixed character count. Colors go through
+/// comfy-table's own cell styling: raw ANSI in cells breaks its width
+/// math and misaligns every column.
 pub fn hits_table(style: &crate::ui::style::Style, hits: &[PackageHit]) -> Table {
+    let colors_on = style.colors_on();
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_width(crate::ui::term_width() as u16);
     table.set_header(vec!["package", "version", "source", "description"]);
     for hit in hits {
+        let color = source_color(&hit.source);
         table.add_row(vec![
-            style.by_source(&hit.source, &hit.name),
-            style.dim(&hit.version),
-            style.by_source(&hit.source, &hit.source),
-            hit.description
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .take(60)
-                .collect::<String>(),
+            styled_cell(&hit.name, color, colors_on),
+            styled_cell(&hit.version, Some(Color::DarkGrey), colors_on),
+            styled_cell(&hit.source, color, colors_on),
+            styled_cell(
+                &hit.description.clone().unwrap_or_default(),
+                None,
+                colors_on,
+            ),
         ]);
     }
     table
@@ -89,9 +119,9 @@ fn truncate_visible(line: &str, width: usize) -> String {
 /// `width` is the content width; every row renders exactly w+4 cells.
 pub fn panel(title: &str, lines: &[String], width: usize) -> String {
     // content width must fit the widest line AND the title segment
-    let w = width
-        .max(visible_len(&format!("─ {title} ")))
-        .max(20);
+    let mut w = width.max(visible_len(&format!("─ {title} "))).max(20);
+    // ... and the terminal: a box wider than the screen wraps and breaks.
+    w = w.min(crate::ui::term_width().saturating_sub(4));
     let inner = w + 2; // " content "
     let mut out = String::new();
     let title_seg = format!("─ {title} ");

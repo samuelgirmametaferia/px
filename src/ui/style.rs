@@ -12,6 +12,11 @@ impl Style {
         Style { on }
     }
 
+    /// Whether to emit colors (drives comfy-table cell styling too).
+    pub fn colors_on(&self) -> bool {
+        self.on
+    }
+
     fn wrap<'a>(&self, s: &'a str, f: impl Fn(&'a str) -> String) -> String {
         if self.on { f(s) } else { s.to_string() }
     }
