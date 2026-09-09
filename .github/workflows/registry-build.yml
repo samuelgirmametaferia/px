@@ -52,6 +52,8 @@ jobs:
         run: |
           if [ -s candidates.jsonl ]; then
             date -u +%FT%TZ > .last-discovery
+            git config user.name "px-registry-bot"
+            git config user.email "actions@github.com"
             export GIT_INDEX_FILE="$RUNNER_TEMP/candidates-index"
             rm -f "$GIT_INDEX_FILE"
             git read-tree --empty
