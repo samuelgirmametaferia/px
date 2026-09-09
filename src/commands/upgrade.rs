@@ -50,10 +50,9 @@ pub async fn run(app: App) -> PxResult<()> {
         crate::backend::elevate::preflight().await?;
     }
 
-    let pb = crate::ui::spinner::one(&format!(
-        "upgrading via {}…",
-        def.argv.last().cloned().unwrap_or_default()
-    ));
+    // argv[1] is the package manager itself (sudo pacman -Syu ...)
+    let pm_name = def.argv.get(1).cloned().unwrap_or_else(|| "system".into());
+    let pb = crate::ui::spinner::one(&format!("upgrading via {pm_name}…"));
     let pkg = String::new();
     let argv = crate::exec::expand_argv(&def.argv, &pkg, &[], None, None);
     let out = app

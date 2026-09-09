@@ -43,10 +43,42 @@ pub fn visible_len(s: &str) -> usize {
     len
 }
 
-/// Pad a (possibly styled) string with spaces to a visible width.
+/// Pad a (possibly styled) string with spaces to a visible width, or
+/// truncate it (with an ANSI reset) if it's already longer.
 fn pad_to(line: &str, width: usize) -> String {
-    let pad = width.saturating_sub(visible_len(line));
-    format!("{line}{}", " ".repeat(pad))
+    let len = visible_len(line);
+    if len >= width {
+        return truncate_visible(line, width);
+    }
+    format!("{line}{}", " ".repeat(width - len))
+}
+
+/// Cut a styled string at a visible width; appends a reset so any open
+/// color can't bleed into the border.
+fn truncate_visible(line: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut len = 0usize;
+    let mut in_esc = false;
+    for c in line.chars() {
+        if in_esc {
+            out.push(c);
+            if c == 'm' {
+                in_esc = false;
+            }
+            continue;
+        }
+        if c == '\x1b' {
+            out.push(c);
+            in_esc = true;
+            continue;
+        }
+        if len >= width {
+            return format!("{out}\x1b[0m");
+        }
+        out.push(c);
+        len += 1;
+    }
+    out
 }
 
 /// Box-drawing panel: a titled section used in install plans.
@@ -54,15 +86,21 @@ fn pad_to(line: &str, width: usize) -> String {
 ///   │ ripgrep 14.1.0           (repo)   │
 ///   ╰───────────────────────────────────╯
 /// Widths are measured by VISIBLE length so styled lines stay aligned.
+/// `width` is the content width; every row renders exactly w+4 cells.
 pub fn panel(title: &str, lines: &[String], width: usize) -> String {
-    let w = width.max(visible_len(title) + 4).max(20);
+    // content width must fit the widest line AND the title segment
+    let w = width
+        .max(visible_len(&format!("─ {title} ")))
+        .max(20);
+    let inner = w + 2; // " content "
     let mut out = String::new();
     let title_seg = format!("─ {title} ");
-    out.push_str(&format!("╭{title_seg:<width$}╮\n", width = w + 1));
+    let dashes = inner.saturating_sub(visible_len(&title_seg));
+    out.push_str(&format!("╭{title_seg}{}╮\n", "─".repeat(dashes)));
     for line in lines {
-        out.push_str(&format!("│ {} │\n", pad_to(line, w - 1)));
+        out.push_str(&format!("│ {} │\n", pad_to(line, w)));
     }
-    out.push_str(&format!("╰{:-<width$}╯\n", "", width = w + 1));
+    out.push_str(&format!("╰{}╯\n", "─".repeat(inner)));
     out.pop(); // trailing newline
     out
 }

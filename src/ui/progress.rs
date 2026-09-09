@@ -40,6 +40,11 @@ pub fn install_bar(style: BarStyle, total: usize, label: &str) -> ProgressBar {
     let pb = ProgressBar::new(total as u64);
     pb.set_style(style.template());
     pb.set_message(label.to_string());
+    // Redraw on a timer, not just on inc(): a single-package install can
+    // legitimately run for minutes without a step, and a bar frozen at
+    // "0% [00:00:00]" looks exactly like a hang. The steady tick keeps the
+    // elapsed clock live so the user always knows it's working.
+    pb.enable_steady_tick(std::time::Duration::from_millis(500));
     set_active(&pb);
     pb
 }
