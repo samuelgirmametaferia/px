@@ -28,6 +28,18 @@ pub fn run(app: App) -> PxResult<()> {
         }
     );
     println!("  git       {}", tool_status("git"));
+    // sandbox: what guards npm / install.sh / source-build steps
+    if crate::sandbox::bwrap_available() {
+        println!(
+            "  sandbox   {}",
+            style.ok("bwrap — npm, install.sh and source builds run with the system read-only")
+        );
+    } else {
+        println!(
+            "  sandbox   {}",
+            style.warn("bwrap missing — risky installs run unsandboxed (px install bubblewrap)")
+        );
+    }
     println!();
 
     // --- recipe ------------------------------------------------------------
