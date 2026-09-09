@@ -6,8 +6,7 @@
 use crate::app::App;
 use crate::error::{PxError, PxResult};
 
-const CANDIDATES_URL: &str =
-    "https://raw.githubusercontent.com/samuelgirmametaferia/px/candidates/registry-candidates.jsonl";
+const CANDIDATES_URL: &str = "https://raw.githubusercontent.com/samuelgirmametaferia/px/candidates/registry-candidates.jsonl";
 
 #[derive(serde::Deserialize)]
 struct Candidate {
@@ -34,7 +33,13 @@ pub async fn run(app: App) -> PxResult<()> {
         Some(t) => t,
         None => {
             let api = "https://api.github.com/repos/samuelgirmametaferia/px/contents/registry-candidates.jsonl?ref=candidates";
-            match app.client.get(api).header("Accept", "application/vnd.github.raw").send().await {
+            match app
+                .client
+                .get(api)
+                .header("Accept", "application/vnd.github.raw")
+                .send()
+                .await
+            {
                 Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
                 Ok(r) if r.status() == 404 => {
                     println!(
@@ -51,7 +56,7 @@ pub async fn run(app: App) -> PxResult<()> {
                     return Err(PxError::User(format!(
                         "candidates fetch returned HTTP {}",
                         r.status()
-                    )))
+                    )));
                 }
                 Err(e) => return Err(PxError::Network(e)),
             }
@@ -69,7 +74,11 @@ pub async fn run(app: App) -> PxResult<()> {
         && r.status().is_success()
     {
         let ts = r.text().await.unwrap_or_default();
-        println!("  {} discovery run: {}", style.dim("·"), style.dim(ts.trim()));
+        println!(
+            "  {} discovery run: {}",
+            style.dim("·"),
+            style.dim(ts.trim())
+        );
     }
 
     let cands: Vec<Candidate> = text
@@ -78,7 +87,10 @@ pub async fn run(app: App) -> PxResult<()> {
         .collect();
 
     if cands.is_empty() {
-        println!("  {} discovery found nothing in the last run", style.warn("○"));
+        println!(
+            "  {} discovery found nothing in the last run",
+            style.warn("○")
+        );
         return Ok(());
     }
 

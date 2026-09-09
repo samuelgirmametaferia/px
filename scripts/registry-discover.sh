@@ -8,9 +8,17 @@ set -euo pipefail
 # GitHub code search needs auth; the workflow runs with GITHUB_TOKEN.
 QUERY_PREFIX='curl -fsSL language:Shell pushed:>2026-08-01'
 
-for q in "curl -fsSL | bash" "curl -fsSL | sh" "wget -qO- | sh"; do
-  gh api "search/code?q=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$q $QUERY_PREFIX")" \
-    --paginate || echo "search failed for: $q" >&2
+# code search is hard rate-limited (429s burned the whole run before) —
+# ONE query per run, rotated by day-of-week, with a backoff retry
+QUERIES=("curl -fsSL | bash" "curl -fsSL | sh" "wget -qO- | sh")
+q="${QUERIES[$(( $(date -u +%u) % ${#QUERIES[@]} ))]}"
+encoded=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$q $QUERY_PREFIX")
+for attempt in 1 2; do
+  if gh api "search/code?q=$encoded" --paginate; then
+    break
+  fi
+  echo "search 429'd (attempt $attempt), backing off 30s" >&2
+  sleep 30
 done | jq -r '.items[]? | .repository.full_name' | sort -u | while read -r repo; do
   # only repos whose README also documents an installer — strong evidence
   readme=$(gh api "repos/$repo/readme" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || {
