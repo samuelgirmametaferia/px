@@ -78,6 +78,61 @@ fn shell_fixture_finds_commands() {
     );
 }
 
+/// Regression for px 0.1.0, which proposed Windows_NT, CDPATH, fetched,
+/// check_download, ... as packages from a real-world launcher script.
+#[test]
+fn shell_fixture_produces_no_garbage() {
+    let d = analyze("shell", "fixtures/shell");
+    let proposed: Vec<String> = d
+        .system
+        .iter()
+        .map(|s| s.import.trim_start_matches("command: ").to_string())
+        .collect();
+    for garbage in [
+        "Windows_NT",
+        "CDPATH",
+        "CYGWIN",
+        "MINGW",
+        "MSYS",
+        "Linux",
+        "Darwin",
+        "cached",
+        "fetched",
+        "refusing",
+        "sandboxes",
+        "asset",
+        "sidecar_ok",
+        "skips",
+        "fall",
+        "home_bin",
+        "exe",
+        "amd64",
+        "aarch64",
+        "expected",
+        "check_download",
+        "fetch_url",
+        "probe_ok",
+        "impeccable",
+        "machine",
+        "probe",
+        "none",
+        "yes",
+    ] {
+        assert!(
+            !proposed.iter().any(|p| p == garbage),
+            "{garbage} must never be proposed (got {proposed:?})"
+        );
+    }
+    // and nothing that ISN'T a real signal leaks: only the deploy.sh
+    // commands (ffmpeg, jq, inotifywait) plus shebang/override entries
+    for p in &proposed {
+        assert!(
+            p == "ffmpeg" || p == "jq" || p == "inotifywait" || p == "bash",
+            "unexpected proposal: {p}"
+        );
+    }
+}
+
 #[test]
 fn ruby_fixture_finds_gems() {
     let d = analyze("ruby", "fixtures/ruby");

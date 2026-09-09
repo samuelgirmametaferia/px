@@ -86,3 +86,51 @@ tools = ["java-21-openjdk-devel"]
 enabled = true
 tools = ["ruby"]
 runtime_deps = ["gcc", "make", "ruby-devel"]
+
+[maintenance.uninstall]
+argv = ["sudo", "zypper", "--non-interactive", "remove", "{pkgs...}"]
+elevated = true
+
+[maintenance.updates]
+argv = ["zypper", "--non-interactive", "list-updates"]
+parse = "zypper_search"
+
+[maintenance.orphans]
+argv = ["zypper", "--non-interactive", "packages", "--unneeded"]
+parse = "zypper_search"
+
+[maintenance.installed_info]
+argv = ["rpm", "-q", "--queryformat", "%{SIZE}\\t%{NAME}\\n", "{pkgs...}"]
+parse = "dpkg_size"
+
+[maintenance.explicit]
+argv = ["zypper", "--non-interactive", "search", "-i", "--installed-only"]
+parse = "zypper_search"
+
+[[apps]]
+match = ["claude-code", "claude", "claudecode"]
+label = "Claude Code"
+method = "npm"
+package = "@anthropic-ai/claude-code"
+require_any = ["npm"]
+
+[[apps]]
+match = ["codex", "openai-codex"]
+label = "OpenAI Codex CLI"
+method = "npm"
+package = "@openai/codex"
+require_any = ["npm"]
+
+[[apps]]
+match = ["bun", "bunjs"]
+label = "Bun"
+method = "script"
+url = "https://bun.sh/install"
+require_any = ["curl"]
+
+[[apps]]
+match = ["deno"]
+label = "Deno"
+method = "script"
+url = "https://deno.land/install.sh"
+require_any = ["curl"]

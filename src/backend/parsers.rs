@@ -215,7 +215,8 @@ pub fn dnf_info(text: &str, source: &str) -> Vec<PackageHit> {
 
 /// `dnf -q provides <path>`: "name-version.arch : path" or
 /// "name-version.arch repo" lines. Keep just the name.
-pub fn dnf_provides(text: &str, source: &str) -> Vec<PackageHit> {    text.lines()
+pub fn dnf_provides(text: &str, source: &str) -> Vec<PackageHit> {
+    text.lines()
         .filter_map(|l| {
             let first = l.split(':').next()?.trim();
             if first.is_empty() {
@@ -269,7 +270,11 @@ pub fn zypper_search(text: &str, source: &str) -> Vec<PackageHit> {
                 return None; // srcpackage, pattern, application...
             }
             let name = cols[1].to_string();
-            if name.chars().next().is_some_and(|c| !c.is_ascii_alphanumeric() && c != '_') {
+            if name
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_ascii_alphanumeric() && c != '_')
+            {
                 return None; // separator rows / malformed
             }
             Some(PackageHit {
@@ -348,4 +353,115 @@ pub fn parsers_known(def: &crate::recipe::schema::SourceDef) -> bool {
         .flatten()
         .filter_map(|c| c.parse.as_deref())
         .all(|p| KNOWN_PARSERS.contains(&p))
+}
+
+// ------------------------------------------------------------ maintenance
+// Parsers for the recipe's [maintenance.*] commands — uninstall support,
+// update notices, orphan/unused detection. These return plain data rather
+// than PackageHits.
+
+/// One name per line ("pacman -Qtdq", "apt-mark showmanual", ...).
+pub fn names_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.split_whitespace().next().unwrap_or(l).to_string())
+        .collect()
+}
+
+/// Update listings across package managers:
+///   pacman -Qu:   "firefox 130.0-1 -> 131.0-1"
+///   apt list:     "ffmpeg/jammy-updates 7:7.0.2-3 upgradable [...]"
+///   dnf check:    "firefox.x86_64  131.0-1.fc40  updates"
+pub fn updates_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            if t.is_empty()
+                || t.starts_with("Listing")
+                || t.starts_with("Last metadata")
+                || t.starts_with('=')
+            {
+                return None;
+            }
+            let first = t.split_whitespace().next()?;
+            let name = first
+                .split('/')
+                .next()
+                .unwrap_or(first)
+                .split('.')
+                .next()
+                .unwrap_or(first);
+            if name.is_empty() || name.contains(':') && !name.contains('/') {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect()
+}
+
+/// "SIZE<TAB>NAME" lines (dpkg-query -W -f, rpm --queryformat).
+pub fn size_lines(text: &str) -> Vec<(String, u64)> {
+    text.lines()
+        .filter_map(|l| {
+            let mut parts = l.split('\t');
+            let size: u64 = parts.next()?.trim().parse().ok()?;
+            let name = parts.next()?.trim().to_string();
+            if name.is_empty() {
+                None
+            } else {
+                Some((name, size))
+            }
+        })
+        .collect()
+}
+
+/// Human size → bytes ("2.40 MiB", "1.5 GiB", "740 KiB", "1024 B").
+pub fn human_size_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num, unit) = s.split_once(' ')?;
+    let num: f64 = num.parse().ok()?;
+    let mult = match unit.trim() {
+        "B" => 1.0,
+        "KiB" | "kB" | "KB" => 1024.0,
+        "MiB" | "MB" => 1024.0 * 1024.0,
+        "GiB" | "GB" => 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((num * mult) as u64)
+}
+
+/// pacman -Qi block → (installed size, install date) for suggest.
+pub fn pacman_qi(text: &str) -> Option<(u64, Option<String>)> {
+    let mut size = None;
+    let mut date = None;
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            let k = k.trim();
+            let v = v.trim();
+            if k == "Installed Size" {
+                size = human_size_bytes(v);
+            } else if k == "Install Date" {
+                date = Some(v.to_string());
+            }
+        }
+    }
+    size.map(|s| (s, date))
+}
+
+/// Dispatch a maintenance parse by recipe parser name → package names.
+pub fn parse_maintenance_names(parse: &str, text: &str) -> Vec<String> {
+    match parse {
+        "names_lines" | "apt_autoremove" | "dnf_leaves" => names_lines(text),
+        "name_version_lines" | "apt_upgradable" | "dnf_check_update" => updates_names(text),
+        "zypper_search" => zypper_search(text, "repo")
+            .into_iter()
+            .map(|h| h.name)
+            .collect(),
+        "dpkg_size" => size_lines(text).into_iter().map(|(n, _)| n).collect(),
+        other => {
+            tracing::warn!("unknown maintenance parser '{other}'");
+            Vec::new()
+        }
+    }
 }

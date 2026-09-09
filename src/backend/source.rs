@@ -71,22 +71,49 @@ impl Provider for SourceProvider {
         let Some(def) = &self.src.def.info else {
             return Ok(None);
         };
+        // Cross-run disk cache: info checks hit pacman/zypper subprocesses
+        // and repeat constantly across runs on the same project.
+        let key = format!("info:{}:{}", self.src.def.id, exact);
+        if let Some(cached) =
+            crate::cache::get("provider", &key, std::time::Duration::from_secs(3600))
+        {
+            if cached == "miss" {
+                return Ok(None);
+            }
+            if let Ok(hit) = serde_json::from_str::<PackageHit>(&cached) {
+                return Ok(Some(hit));
+            }
+        }
         let stdout = self.run(def, exact).await?;
         let parse = def.parse.as_deref().unwrap_or("pacman_info");
-        Ok(
-            crate::backend::parsers::parse_output(parse, &stdout, &self.src.def.id)
-                .into_iter()
-                .find(|h| h.name == exact),
-        )
+        let hit = crate::backend::parsers::parse_output(parse, &stdout, &self.src.def.id)
+            .into_iter()
+            .find(|h| h.name == exact);
+        let cacheable = match &hit {
+            Some(h) => serde_json::to_string(h).unwrap_or_default(),
+            None => "miss".to_string(),
+        };
+        crate::cache::put("provider", &key, &cacheable);
+        Ok(hit)
     }
 
     async fn is_installed(&self, name: &str) -> PxResult<bool> {
         let Some(def) = &self.src.def.installed else {
             return Ok(false);
         };
+        // Installed state changes when px itself installs something, so
+        // only cache the negative answer briefly; cache "installed" longer.
+        let key = format!("installed:{}:{}", self.src.def.id, name);
+        if let Some(cached) =
+            crate::cache::get("provider", &key, std::time::Duration::from_secs(300))
+            && let Ok(v) = cached.parse::<bool>() {
+                return Ok(v);
+            }
         let argv = expand_argv(&def.argv, name, &[name.to_string()], self.helper(), None);
         let out = self.exec.run(&argv, RunOpts::default()).await?;
-        Ok(out.success())
+        let installed = out.success();
+        crate::cache::put("provider", &key, &installed.to_string());
+        Ok(installed)
     }
 }
 

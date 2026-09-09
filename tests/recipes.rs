@@ -90,14 +90,21 @@ fn fedora_recipe_shape() {
 fn opensuse_recipe_shape() {
     let recipe = Recipe::parse_str(bundled::OPENSUSE).unwrap();
     let repo = recipe.sources.iter().find(|s| s.id == "repo").unwrap();
-    assert!(repo.install.as_ref().unwrap().argv.contains(&"zypper".to_string()));
+    assert!(
+        repo.install
+            .as_ref()
+            .unwrap()
+            .argv
+            .contains(&"zypper".to_string())
+    );
     // installed check via rpm (works on every suse box)
-    assert!(repo
-        .installed
-        .as_ref()
-        .unwrap()
-        .argv
-        .contains(&"rpm".to_string()));
+    assert!(
+        repo.installed
+            .as_ref()
+            .unwrap()
+            .argv
+            .contains(&"rpm".to_string())
+    );
     let c = recipe.ecosystem("c").unwrap();
     assert_eq!(
         c.header_map.get("openssl").map(|s| s.as_str()),
@@ -182,4 +189,50 @@ fn detection_rules_match_os_release_samples() {
     // Neither rule matches without pacman/dnf/apt; on an arch CI box the
     // command rule would fire. Just assert no panic.
     let _ = px::recipe::detect::recipe_matches(&arch, &os);
+}
+
+#[test]
+fn all_recipes_have_maintenance_commands() {
+    for (id, text) in bundled::all() {
+        let recipe = Recipe::parse_str(text).unwrap();
+        let m = &recipe.maintenance;
+        assert!(m.uninstall.is_some(), "{id} needs an uninstall command");
+        assert!(m.updates.is_some(), "{id} needs an updates command");
+        assert!(m.orphans.is_some(), "{id} needs an orphans command");
+        assert!(m.installed_info.is_some(), "{id} needs installed_info");
+        assert!(m.explicit.is_some(), "{id} needs an explicit listing");
+        // installed_info must batch ({pkgs...}), not one package per call
+        assert!(
+            m.installed_info
+                .as_ref()
+                .unwrap()
+                .argv
+                .contains(&"{pkgs...}".to_string()),
+            "{id} installed_info must use {{pkgs...}}"
+        );
+    }
+}
+
+#[test]
+fn apps_registry_shapes() {
+    for (id, text) in bundled::all() {
+        let recipe = Recipe::parse_str(text).unwrap();
+        assert!(!recipe.apps.is_empty(), "{id} should know some apps");
+        for app in &recipe.apps {
+            assert!(!app.match_.is_empty(), "{id} app needs match names");
+            assert!(
+                app.method == "npm" || app.method == "script",
+                "{id} app {} has unknown method {}",
+                app.label,
+                app.method
+            );
+        }
+    }
+    // claude-code resolves through every recipe's registry
+    let arch = Recipe::parse_str(bundled::ARCH).unwrap();
+    assert!(
+        arch.apps
+            .iter()
+            .any(|a| a.match_.contains(&"claude-code".to_string()))
+    );
 }

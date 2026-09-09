@@ -28,6 +28,12 @@ impl App {
         let config = Config::load();
         let style = Style::new(crate::ui::colors_enabled(cli.no_color));
 
+        // Housekeeping: drop expired cache entries so ~/.cache/px stays
+        // bounded without anyone ever running `px cache clean` by hand.
+        crate::cache::purge_expired(std::time::Duration::from_secs(
+            config.cache_search_secs.max(3600),
+        ));
+
         let client = reqwest::Client::builder()
             .user_agent(concat!("px/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -60,6 +66,9 @@ impl App {
         .await?;
 
         let exec: Arc<dyn Executor> = Arc::new(RealExecutor::new());
+
+        // Jokes pool for long installs (fetches fresh ones opportunistically).
+        crate::ui::jokes::init(&client);
 
         Ok(App {
             cli,
@@ -113,6 +122,48 @@ impl App {
     }
 
     pub async fn run(self) -> PxResult<()> {
+        // The one-time welcome animation, then the jokes pool.
+        if crate::ui::spectrum::should_run()
+            && !self.cli.no_color
+            && self
+                .cli
+                .command
+                .as_ref()
+                .is_some_and(|c| !matches!(c, Command::Doctor))
+        {
+            crate::ui::spectrum::play();
+        }
+
+        // Instance lock: a live previous px is reported, never blocked —
+        // the package managers serialize themselves.
+        let cmd_label = self
+            .cli
+            .command
+            .as_ref()
+            .map(|c| format!("{c:?}"))
+            .unwrap_or_else(|| "interactive".into());
+        if let Some(prev) = crate::state::acquire_lock(&cmd_label)
+            && prev.pid != std::process::id() {
+                eprintln!(
+                    "{}",
+                    self.style.warn(&format!(
+                        "another px is already running (pid {}, {}) — proceeding; your package manager will serialize if needed",
+                        prev.pid, prev.command
+                    ))
+                );
+            }
+
+        let result = self.run_inner().await;
+        crate::state::release_lock();
+        result
+    }
+
+    async fn run_inner(self) -> PxResult<()> {
+        // --tutorial wins over any command.
+        if self.cli.tutorial {
+            return commands::tutorial::run(self);
+        }
+
         let Some(command) = self.cli.command.clone() else {
             // Bare `px` or `px -i` with no subcommand → interactive install.
             return commands::install::interactive(self).await;
@@ -128,10 +179,14 @@ impl App {
                     commands::install::run(self, &specs).await
                 }
             }
+            Command::Uninstall { specs } => commands::uninstall::run(self, &specs).await,
+            Command::Suggest => commands::suggest::run(self).await,
+            Command::Status => commands::status::run(self).await,
             Command::Search { term } => commands::search::run(self, &term.join(" ")).await,
             Command::Info { name } => commands::info::run(self, &name).await,
             Command::List => commands::list::run(self),
             Command::Doctor => commands::doctor::run(self),
+            Command::Tutorial => commands::tutorial::run(self),
             Command::Recipe { cmd } => match cmd {
                 RecipeCmd::List => commands::recipe::list(self),
                 RecipeCmd::Show => commands::recipe::show(self),

@@ -124,3 +124,64 @@ fn dispatcher_maps_recipe_names() {
     assert!(!p::parse_output("dnf_search", "vim.x86_64 : editor", "repo").is_empty());
     assert!(p::parse_output("nope", "anything", "repo").is_empty());
 }
+
+// ------------------------------------------------------------- maintenance
+
+#[test]
+fn names_lines_parses_pacman_qtdq() {
+    let text = "simdjson\nsvt-hevc\nada\n";
+    assert_eq!(p::names_lines(text), vec!["simdjson", "svt-hevc", "ada"]);
+}
+
+#[test]
+fn updates_names_across_managers() {
+    // pacman -Qu
+    assert_eq!(
+        p::updates_names("firefox 130.0-1 -> 131.0-1\nvim 9.1.1-1 -> 9.1.2-1\n"),
+        vec!["firefox", "vim"]
+    );
+    // apt list --upgradable (header skipped, /suite stripped)
+    assert_eq!(
+        p::updates_names("Listing...\nffmpeg/jammy-updates 7:7.0.2-3 upgradable\n"),
+        vec!["ffmpeg"]
+    );
+    // dnf check-update (arch stripped)
+    assert_eq!(
+        p::updates_names(
+            "Last metadata expiration check: ...\nfirefox.x86_64 131.0-1.fc40 updates\n"
+        ),
+        vec!["firefox"]
+    );
+}
+
+#[test]
+fn human_size_bytes_converts() {
+    assert_eq!(p::human_size_bytes("512 B"), Some(512));
+    assert_eq!(p::human_size_bytes("1.00 KiB"), Some(1024));
+    assert_eq!(p::human_size_bytes("2.40 MiB"), Some(2516582));
+    assert_eq!(p::human_size_bytes("1.50 GiB"), Some(1610612736));
+    assert_eq!(p::human_size_bytes("nonsense"), None);
+}
+
+#[test]
+fn size_lines_parses_dpkg_and_rpm() {
+    let text = "45678\tffmpeg\n1024\tjq\n";
+    assert_eq!(
+        p::size_lines(text),
+        vec![("ffmpeg".to_string(), 45678), ("jq".to_string(), 1024)]
+    );
+}
+
+#[test]
+fn pacman_qi_extracts_size_and_date() {
+    let text = "\
+Name            : ada
+Version         : 2.9.2-2
+Description     : The Ada programming language compiler
+Installed Size  : 1004.19 KiB
+Install Date    : Thu 05 Sep 2026 10:12:33 AM PDT
+";
+    let (size, date) = p::pacman_qi(text).expect("qi parse");
+    assert_eq!(size, 1028290);
+    assert!(date.unwrap().contains("05 Sep 2026"));
+}

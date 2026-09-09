@@ -1,5 +1,13 @@
 //! Shell detector: find external commands scripts actually use, and any
 //! interpreters their shebangs reference.
+//!
+//! Parsing shell "properly" is a tar pit; this is a deliberately
+//! conservative extractor — it only proposes a command when several signals
+//! agree (command position, not a builtin/keyword, not a variable
+//! assignment, not a case pattern, not a function defined in the script,
+//! not ALL-CAPS env-style, and it has a lowercase letter). False negatives
+//! are fine; false positives (the `Windows_NT`/`fetched` garbage of early
+//! versions) are not.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -56,11 +64,13 @@ const BUILTINS: &[&str] = &[
     "let",
     "local",
     "logout",
+    "mapfile",
     "popd",
     "printf",
     "pushd",
     "pwd",
     "read",
+    "readarray",
     "readonly",
     "return",
     "select",
@@ -150,6 +160,7 @@ const BUILTINS: &[&str] = &[
     "pacman",
     "dnf",
     "rpm",
+    "zypper",
     "systemctl",
     "journalctl",
     "ip",
@@ -165,7 +176,6 @@ const BUILTINS: &[&str] = &[
     "free",
     "mount",
     "umount",
-    "fstab",
     "seq",
     "expr",
     "numfmt",
@@ -180,6 +190,7 @@ const BUILTINS: &[&str] = &[
     "pip",
     "node",
     "npm",
+    "npx",
     "go",
     "cargo",
     "rustc",
@@ -192,7 +203,6 @@ const BUILTINS: &[&str] = &[
     "gem",
     "perl",
     "php",
-    "echo",
     "print",
     "readlink",
     "realpath",
@@ -205,11 +215,114 @@ const BUILTINS: &[&str] = &[
     "zip",
     "unzip",
     "7z",
-    "rsync",
+    "coproc",
 ];
 
-/// Commands in the denylist that ARE worth proposing (they're commonly not
-/// installed by default) — the recipe's overrides decide their package.
+/// Common English words that show up at command position in scripts (echo
+/// arguments, log messages, case bodies) but are never program names. Small,
+/// honest denylist — the layered filters above it do the heavy lifting.
+const WORD_NOISE: &[&str] = &[
+    "on",
+    "off",
+    "in",
+    "out",
+    "ok",
+    "no",
+    "yes",
+    "all",
+    "none",
+    "some",
+    "fall",
+    "fail",
+    "failed",
+    "success",
+    "error",
+    "warning",
+    "info",
+    "debug",
+    "trace",
+    "version",
+    "check",
+    "checked",
+    "checking",
+    "cached",
+    "fetched",
+    "fetching",
+    "expected",
+    "probing",
+    "refusing",
+    "skipping",
+    "skips",
+    "sandboxes",
+    "sandbox",
+    "asset",
+    "assets",
+    "exe",
+    "bin",
+    "lib",
+    "src",
+    "opt",
+    "tmp",
+    "var",
+    "etc",
+    "usr",
+    "home",
+    "root",
+    "cache",
+    "impeccable",
+    "download",
+    "downloads",
+    "path",
+    "file",
+    "files",
+    "dir",
+    "name",
+    "value",
+    "type",
+    "mode",
+    "data",
+    "text",
+    "line",
+    "lines",
+    "code",
+    "usage",
+    "help",
+    "please",
+    "done",
+    "todo",
+    "note",
+    "notes",
+    "only",
+    "also",
+    "then",
+    "when",
+    "with",
+    "without",
+    "from",
+    "into",
+    "onto",
+    "over",
+    "under",
+    "after",
+    "before",
+    "amd64",
+    "x86_64",
+    "aarch64",
+    "arm64",
+    "arm",
+    "i386",
+    "darwin",
+    "linux",
+    "unix",
+    "cygwin",
+    "mingw",
+    "msys",
+    "windows",
+    "macos",
+    "osx",
+    "posix",
+];
+
 pub struct ShellDetector;
 
 impl ShellDetector {
@@ -221,13 +334,32 @@ impl ShellDetector {
         // Extensionless executable with a sh shebang.
         if ext.is_empty()
             && let Some(line) = first_line(file)
-            && line.starts_with("#!")
-            && (line.contains("/sh") || line.contains("bash"))
-        {
-            return true;
-        }
+                && line.starts_with("#!") && (line.contains("/sh") || line.contains("bash")) {
+                    return true;
+                }
         false
     }
+}
+
+/// Function names defined anywhere in the script (`foo() {`, `function foo`).
+fn defined_functions(text: &str) -> BTreeSet<String> {
+    let re = regex::Regex::new(r"(?m)^\s*(?:function\s+)?([\w-]+)\s*\(\s*\)").unwrap();
+    re.captures_iter(text)
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
+/// True for lines that are `case` branch patterns (`foo|bar)` or `*)`).
+fn is_case_pattern(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(before) = t.split(')').next() else {
+        return false;
+    };
+    !before.is_empty()
+        && before
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "|*_-.".contains(c))
+        && !before.contains(' ')
 }
 
 impl Detector for ShellDetector {
@@ -245,12 +377,16 @@ impl Detector for ShellDetector {
         let mut interpreters: BTreeSet<String> = BTreeSet::new();
         let mut evidence: Vec<String> = Vec::new();
 
-        // Word at "command position": start of line or after ; | && || $( `etc.
+        // Word at "command position": start of line or after ; | & $( `etc.
         // (?m) makes ^ anchor at every line start.
         let cmd_start = regex::Regex::new(
             r"(?m)(?:^|[;|&]\s*|\$\(\s*|`\s*|\bthen\s+|\bdo\s+|\belse\s+|\belif\s+)([a-zA-Z][\w.+-]*)",
         )
         .unwrap();
+        // Assignment lines: `FOO=...`, `local FOO=...`, `export FOO=...`.
+        let assignment =
+            regex::Regex::new(r"^\s*(local|export|declare|readonly|typeset)\s|^\s*[\w.\[\]-]+=")
+                .unwrap();
 
         for file in files {
             if !self.is_shell_script(file) {
@@ -271,9 +407,29 @@ impl Detector for ShellDetector {
             {
                 interpreters.insert(interp);
             }
-            for caps in cmd_start.captures_iter(&text) {
-                if let Some(m) = caps.get(1) {
-                    commands.insert(m.as_str().to_string());
+            let functions = defined_functions(&text);
+
+            for line in text.lines() {
+                // Case branch patterns and pure assignments are not commands.
+                if is_case_pattern(line) || assignment.is_match(line) {
+                    continue;
+                }
+                if let Some(caps) = cmd_start.captures(line)
+                    && let Some(m) = caps.get(1)
+                {
+                    let word = m.as_str();
+                    // Layered filters — every one must pass.
+                    let plausible = !BUILTINS.contains(&word)
+                            && !WORD_NOISE.contains(&word.to_lowercase().as_str())
+                            && !functions.contains(word)
+                            // env-var style: CDPATH, Windows_NT, PATH_2_X
+                            && !(word.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                                && !word.chars().any(|c| c.is_ascii_lowercase()))
+                            && word.chars().any(|c| c.is_ascii_lowercase())
+                            && word.len() <= 24;
+                    if plausible {
+                        commands.insert(word.to_string());
+                    }
                 }
             }
             if evidence.len() < 8 {
@@ -300,9 +456,6 @@ impl Detector for ShellDetector {
         }
 
         for cmd in &commands {
-            if BUILTINS.contains(&cmd.as_str()) {
-                continue;
-            }
             // Present on this machine? Then no need to propose anything —
             // unless the recipe has an explicit override anyway.
             let on_path = which::which(cmd).is_ok();

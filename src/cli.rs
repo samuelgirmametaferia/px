@@ -51,8 +51,27 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub global: bool,
 
+    /// Progress bar style for installs.
+    #[arg(long, global = true, value_parser = bar_style_parser, default_value = "shades")]
+    pub bar: String,
+
+    /// Run the interactive tutorial.
+    #[arg(long, global = true)]
+    pub tutorial: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+fn bar_style_parser(s: &str) -> Result<String, String> {
+    if crate::ui::progress::BarStyle::parse(s).is_some() {
+        Ok(s.to_string())
+    } else {
+        Err(format!(
+            "unknown bar style '{s}' (try: {})",
+            crate::ui::progress::BarStyle::names()
+        ))
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -62,6 +81,15 @@ pub enum Command {
         /// Package specs. `for <PATH>` switches to project analysis.
         specs: Vec<String>,
     },
+
+    /// Uninstall packages through your distro's own tools.
+    Uninstall { specs: Vec<String> },
+
+    /// Find unused/unneeded packages and offer to remove them (free space).
+    Suggest,
+
+    /// Running px instance, interrupted installs, cache state.
+    Status,
 
     /// Search every active source in parallel.
     Search { term: Vec<String> },
@@ -74,6 +102,9 @@ pub enum Command {
 
     /// Show recipe status, tools, caches — what px sees on this machine.
     Doctor,
+
+    /// Learn px interactively.
+    Tutorial,
 
     /// Inspect recipes.
     Recipe {

@@ -6,3 +6,7 @@ pub mod install_for;
 pub mod list;
 pub mod recipe;
 pub mod search;
+pub mod status;
+pub mod suggest;
+pub mod tutorial;
+pub mod uninstall;

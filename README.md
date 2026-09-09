@@ -96,15 +96,41 @@ distros.
 | `px install <pkgs...>` | parallel multi-source resolve + install |
 | `px install for <path>` | project analysis (`--local` / `--global`) |
 | `px -i` / `px -i -> <path>` / `px -i for <path>` | interactive forms |
+| `px uninstall <pkgs...>` | remove packages through your distro's tools |
+| `px suggest` | find unused packages + space hogs, offer to free them |
+| `px status` | running px instance, interrupted installs, caches |
 | `px search <term>` | search every source, fuzzy-ranked table |
 | `px info <pkg>` | merged info from every source |
 | `px list` | packages px installed (its own ledger) |
 | `px doctor` | recipe, sources, tools, caches |
+| `px tutorial` / `px --tutorial` | 2-minute interactive walkthrough |
 | `px recipe list\|show` | inspect recipes |
 | `px cache clean` | clean `~/.cache/px` |
 
 Global flags: `-y/--yes`, `--dry-run`, `--local/--global`, `--no-source`,
-`--refresh`, `--recipe <path>`, `--no-color`, `-v/-vv`.
+`--refresh`, `--recipe <path>`, `--bar <style>`, `--no-color`, `-v/-vv`.
+
+## Beyond packages
+
+- **Apps with their own channels.** `px install claude-code` →
+  `npm install -g @anthropic-ai/claude-code`; `px install bun` → the bun
+  installer (shown verbatim, confirmed explicitly). Curated in each recipe's
+  `[[apps]]` registry, with a generic npm-registry fallback.
+- **Suspicious-package investigation.** Before installing an npm package,
+  px checks public metadata — install scripts, typosquatting against
+  popular names, single-publish red flags — and offers to investigate when
+  anything looks off. The report is facts; the decision is yours.
+- **Unused-package suggestions.** `px suggest` lists orphans (safe to
+  remove, with sizes) and your biggest explicit packages, then uninstalls
+  whatever you pick.
+- **Resume.** Installs are journaled — a killed px offers to continue
+  exactly where it stopped. `px status` shows running instances and
+  pending work.
+- **Update notices.** After installing, px passively mentions what else on
+  your system has updates available.
+- **Self-cleaning caches**, a **first-run spectrum animation**, **jokes
+  during installs** (fresh from the internet, cached offline), and
+  **five progress bar styles** (`--bar blocks|shades|rainbow|minimal|sparkles`).
 
 ## Safety rules
 
@@ -113,6 +139,7 @@ Global flags: `-y/--yes`, `--dry-run`, `--local/--global`, `--no-source`,
   aliases can't change what px executes.
 - Arguments are passed directly to child processes, never through a shell.
 - Source builds from GitHub need their own explicit confirmation, always.
+- Installer scripts (`curl | sh`) are shown verbatim before running.
 - `--dry-run` prints the exact argv it would run and changes nothing.
 
 ## Building

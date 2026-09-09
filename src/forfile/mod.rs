@@ -112,76 +112,142 @@ pub fn analyze(path: &Path, recipe: &Recipe) -> PxResult<Analysis> {
 }
 
 /// Post-analysis filtering: drop system deps + tools already installed.
-/// Providers come in priority order; a candidate is "valid" when any
-/// source can find it. Under `dry_run` (distro simulation) validation and
+///
+/// Every candidate check (info + installed) is a subprocess — running them
+/// one-by-one is what made early versions crawl on big projects. All checks
+/// now run concurrently on the multi-threaded runtime, and results are
+/// memoized in a disk cache so repeated runs on the same project are near
+/// instant. Under `dry_run` (distro simulation) validation and
 /// installed-checks are skipped — the point is to see the plan.
 pub async fn filter_installed_and_validate(
     analysis: &mut Analysis,
     providers: &[Arc<dyn crate::backend::Provider>],
     dry_run: bool,
 ) -> PxResult<()> {
-    let mut kept: Vec<detector::SystemDep> = Vec::new();
-    for mut dep in analysis.system.drain(..) {
-        if !dry_run {
-            // Validate candidates: keep only ones some source actually has.
-            let mut valid: Vec<String> = Vec::new();
-            for cand in &dep.candidates {
-                for p in providers {
-                    if p.info(cand).await.ok().flatten().is_some() {
-                        valid.push(cand.clone());
+    use std::sync::{Arc, Mutex};
+
+    type CheckCache = Arc<Mutex<std::collections::HashMap<(String, String), bool>>>;
+
+    // Memoize per (provider, name) across deps — several deps can share
+    // candidates, and tools overlap with deps constantly.
+    let info_cache: CheckCache = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let installed_cache: CheckCache = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+    async fn info_exists(
+        p: &Arc<dyn crate::backend::Provider>,
+        name: &str,
+        cache: &CheckCache,
+    ) -> bool {
+        let key = (p.source_id().to_string(), name.to_string());
+        if let Some(v) = cache.lock().unwrap().get(&key) {
+            return *v;
+        }
+        let v = p.info(name).await.ok().flatten().is_some();
+        cache.lock().unwrap().insert(key, v);
+        v
+    }
+
+    async fn is_installed(
+        p: &Arc<dyn crate::backend::Provider>,
+        name: &str,
+        cache: &CheckCache,
+    ) -> bool {
+        let key = (p.source_id().to_string(), name.to_string());
+        if let Some(v) = cache.lock().unwrap().get(&key) {
+            return *v;
+        }
+        let v = p.is_installed(name).await.unwrap_or(false);
+        cache.lock().unwrap().insert(key, v);
+        v
+    }
+
+    // Phase 1: resolve all deps concurrently (deps don't depend on each other).
+    let mut tasks = Vec::new();
+    for dep in analysis.system.drain(..) {
+        let providers: Vec<Arc<dyn crate::backend::Provider>> = providers.to_vec();
+        let info_cache = Arc::clone(&info_cache);
+        let installed_cache = Arc::clone(&installed_cache);
+        tasks.push(tokio::spawn(async move {
+            let mut dep = dep;
+            if !dry_run {
+                let mut valid: Vec<String> = Vec::new();
+                for cand in &dep.candidates {
+                    for p in &providers {
+                        if info_exists(p, cand, &info_cache).await {
+                            valid.push(cand.clone());
+                            break;
+                        }
+                    }
+                }
+                if valid.is_empty() {
+                    return (
+                        None,
+                        Some(format!(
+                            "{} → no package found (tried {})",
+                            dep.import,
+                            dep.candidates.join(", ")
+                        )),
+                    );
+                }
+                dep.candidates = valid;
+            }
+            if !dry_run {
+                let mut inst = false;
+                for p in &providers {
+                    if is_installed(p, &dep.candidates[0], &installed_cache).await {
+                        inst = true;
                         break;
                     }
                 }
-            }
-            if valid.is_empty() {
-                analysis.unmapped.push(format!(
-                    "{} → no package found (tried {})",
-                    dep.import,
-                    dep.candidates.join(", ")
-                ));
-                continue;
-            }
-            dep.candidates = valid;
-        }
-        // Installed already?
-        let installed = if dry_run {
-            false
-        } else {
-            let mut inst = false;
-            for p in providers {
-                if p.is_installed(&dep.candidates[0]).await.unwrap_or(false) {
-                    inst = true;
-                    break;
+                if inst {
+                    return (None, None);
                 }
             }
-            inst
-        };
-        if !installed {
+            (Some(dep), None)
+        }));
+    }
+
+    let mut kept: Vec<detector::SystemDep> = Vec::new();
+    for t in tasks {
+        let (dep, unmapped) = t.await.expect("filter task panicked");
+        if let Some(dep) = dep {
             kept.push(dep);
+        } else if let Some(u) = unmapped {
+            analysis.unmapped.push(u);
         }
     }
     analysis.system = kept;
 
-    // Tools: drop installed ones.
-    let mut tools: Vec<String> = Vec::new();
-    for tool in &analysis.tools {
-        let installed = if dry_run {
-            false
-        } else {
-            let mut inst = false;
-            for p in providers {
-                if p.is_installed(tool).await.unwrap_or(false) {
-                    inst = true;
-                    break;
+    // Phase 2: tools, same concurrency.
+    let mut tool_tasks = Vec::new();
+    for tool in analysis.tools.drain(..) {
+        let providers: Vec<Arc<dyn crate::backend::Provider>> = providers.to_vec();
+        let installed_cache = Arc::clone(&installed_cache);
+        tool_tasks.push(tokio::spawn(async move {
+            if dry_run {
+                return tool;
+            }
+            for p in &providers {
+                if is_installed(p, &tool, &installed_cache).await {
+                    return String::new();
                 }
             }
-            inst
-        };
-        if !installed {
-            tools.push(tool.clone());
+            tool
+        }));
+    }
+    for t in tool_tasks {
+        let tool = t.await.expect("tool task panicked");
+        if !tool.is_empty() {
+            analysis.tools.push(tool);
         }
     }
-    analysis.tools = tools;
+
+    // Heuristic same-name shell commands that didn't validate are script
+    // words, not packages — drop them silently instead of noising up the
+    // "couldn't map" list. (Override-backed proposals still report.)
+    analysis
+        .unmapped
+        .retain(|u| !u.starts_with("command: ") || !u.contains("→ no package found"));
 
     Ok(())
 }

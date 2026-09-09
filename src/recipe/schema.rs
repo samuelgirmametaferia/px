@@ -68,6 +68,39 @@ pub struct SourceDef {
     pub provides: Option<CommandDef>,
 }
 
+/// Distro-level maintenance commands — uninstall, update checks, orphans.
+/// These are system-wide, not per-source, so they live at the recipe root.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Maintenance {
+    pub uninstall: Option<CommandDef>,
+    /// Names of packages with updates available (e.g. `pacman -Qu`).
+    pub updates: Option<CommandDef>,
+    /// Orphan packages nothing depends on (e.g. `pacman -Qtd`).
+    pub orphans: Option<CommandDef>,
+    /// Installed-package info block with size/date (e.g. `pacman -Qi`).
+    pub installed_info: Option<CommandDef>,
+    /// Explicitly user-installed packages (e.g. `pacman -Qe`).
+    pub explicit: Option<CommandDef>,
+}
+
+/// A well-known application that installs through its own channel rather
+/// than the distro repos: npm globals, curl|bash installers. Data-driven,
+/// checked after package sources miss and before the GitHub fallback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppDef {
+    /// Names the user might type for this app (TOML key: `match`).
+    #[serde(rename = "match")]
+    pub match_: Vec<String>,
+    pub label: String,
+    /// "npm" → `npm install -g {package}`; "script" → download+run {url}.
+    pub method: String,
+    pub package: Option<String>,
+    pub url: Option<String>,
+    /// Binaries that must exist for this method to work (node/npm, curl...).
+    #[serde(default)]
+    pub require_any: Vec<String>,
+}
+
 /// One command: argv with placeholders + how to parse its output.
 ///
 /// Placeholders (replaced as separate argv entries, never string-spliced):
@@ -157,6 +190,12 @@ pub struct Recipe {
     pub github: GithubConfig,
     #[serde(default)]
     pub ecosystems: BTreeMap<String, EcoConfig>,
+    /// Distro-level maintenance commands (uninstall, updates, orphans...).
+    #[serde(default)]
+    pub maintenance: Maintenance,
+    /// Well-known apps with their own install channels (npm, install.sh).
+    #[serde(default)]
+    pub apps: Vec<AppDef>,
 }
 
 impl Recipe {

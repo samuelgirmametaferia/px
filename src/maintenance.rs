@@ -1,0 +1,203 @@
+//! Recipe-driven maintenance: uninstall, update notices, orphan detection,
+//! installed sizes. Same rules as everything else — px runs the distro's
+//! own commands, defined as data.
+
+use std::sync::Arc;
+
+use crate::error::{PxError, PxResult};
+use crate::exec::{Executor, RunOpts, expand_argv};
+use crate::recipe::schema::{CommandDef, Recipe};
+
+fn expand_no_pkg(def: &CommandDef) -> Vec<String> {
+    expand_argv(&def.argv, "", &[], None, None)
+}
+
+async fn run(exec: &Arc<dyn Executor>, argv: &[String]) -> PxResult<String> {
+    let out = exec.run(argv, RunOpts::default()).await?;
+    Ok(out.stdout)
+}
+
+/// Packages with updates available (for the passive notice after installs).
+pub async fn updates_available(exec: &Arc<dyn Executor>, recipe: &Recipe) -> PxResult<Vec<String>> {
+    let Some(def) = &recipe.maintenance.updates else {
+        return Ok(Vec::new());
+    };
+    let stdout = run(exec, &expand_no_pkg(def)).await?;
+    let parse = def.parse.as_deref().unwrap_or("name_version_lines");
+    let mut names = crate::backend::parsers::parse_maintenance_names(parse, &stdout);
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// Orphan packages — installed, unneeded, prime uninstall candidates.
+pub async fn orphans(exec: &Arc<dyn Executor>, recipe: &Recipe) -> PxResult<Vec<String>> {
+    let Some(def) = &recipe.maintenance.orphans else {
+        return Ok(Vec::new());
+    };
+    let stdout = run(exec, &expand_no_pkg(def)).await?;
+    let parse = def.parse.as_deref().unwrap_or("names_lines");
+    Ok(crate::backend::parsers::parse_maintenance_names(
+        parse, &stdout,
+    ))
+}
+
+/// Explicitly user-installed package names.
+pub async fn explicit_pkgs(exec: &Arc<dyn Executor>, recipe: &Recipe) -> PxResult<Vec<String>> {
+    let Some(def) = &recipe.maintenance.explicit else {
+        return Ok(Vec::new());
+    };
+    let stdout = run(exec, &expand_no_pkg(def)).await?;
+    let parse = def.parse.as_deref().unwrap_or("names_lines");
+    Ok(crate::backend::parsers::parse_maintenance_names(
+        parse, &stdout,
+    ))
+}
+
+/// One installed package: name, on-disk size, install date (if known).
+#[derive(Debug, Clone)]
+pub struct InstalledPkg {
+    pub name: String,
+    pub size: u64,
+    pub installed: Option<String>,
+}
+
+/// Sizes + install dates for many packages in ONE subprocess — the recipes'
+/// installed_info commands all accept multiple names ({pkgs...}).
+pub async fn installed_info(
+    exec: &Arc<dyn Executor>,
+    recipe: &Recipe,
+    names: &[String],
+) -> PxResult<Vec<InstalledPkg>> {
+    let Some(def) = &recipe.maintenance.installed_info else {
+        return Ok(Vec::new());
+    };
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pkg = names[0].clone();
+    let argv = expand_argv(&def.argv, &pkg, names, None, None);
+    let stdout = run(exec, &argv).await?;
+    let parse = def.parse.as_deref().unwrap_or("pacman_qi");
+
+    match parse {
+        // pacman -Qi blocks: Name / Installed Size / Install Date per package
+        "pacman_qi" => {
+            let mut out = Vec::new();
+            let mut current: Vec<(String, String)> = Vec::new();
+            for line in stdout.lines().chain(std::iter::once("")) {
+                if line.trim().is_empty() {
+                    if !current.is_empty() {
+                        if let Some(p) = qi_block(&current) {
+                            out.push(p);
+                        }
+                        current.clear();
+                    }
+                    continue;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    let k = k.trim();
+                    // pacman -Qi keys can contain spaces ("Installed Size");
+                    // the continuation lines of Description are indented and
+                    // contain no ':' so they're skipped naturally.
+                    if !k.is_empty() && k.len() < 40 && !line.starts_with(' ') {
+                        current.push((k.to_string(), v.trim().to_string()));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        // "SIZE\tNAME" lines; dpkg reports KiB, rpm reports bytes.
+        "dpkg_size" => Ok(crate::backend::parsers::size_lines(&stdout)
+            .into_iter()
+            .map(|(name, size)| InstalledPkg {
+                name,
+                size: size * 1024,
+                installed: None,
+            })
+            .collect()),
+        other => {
+            tracing::warn!("unknown installed_info parser '{other}'");
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn qi_block(block: &[(String, String)]) -> Option<InstalledPkg> {
+    let get = |key: &str| {
+        block
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.clone())
+    };
+    let name = get("Name")?;
+    let size = get("Installed Size")
+        .and_then(|s| crate::backend::parsers::human_size_bytes(&s))
+        .unwrap_or(0);
+    Some(InstalledPkg {
+        name,
+        size,
+        installed: get("Install Date"),
+    })
+}
+
+/// Uninstall packages through the recipe's uninstall command.
+pub async fn uninstall(
+    exec: &Arc<dyn Executor>,
+    recipe: &Recipe,
+    pkgs: &[String],
+    dry_run: bool,
+) -> PxResult<()> {
+    let Some(def) = &recipe.maintenance.uninstall else {
+        return Err(PxError::User(
+            "this recipe defines no uninstall command".into(),
+        ));
+    };
+    if def.elevated && !dry_run {
+        crate::backend::elevate::preflight().await?;
+    }
+    let pkg = pkgs.first().cloned().unwrap_or_default();
+    let argv = expand_argv(&def.argv, &pkg, pkgs, None, None);
+    let out = exec
+        .run(
+            &argv,
+            RunOpts {
+                inherit: true,
+                dry_run,
+                ..Default::default()
+            },
+        )
+        .await?;
+    if !out.success() {
+        return Err(PxError::Command {
+            cmd: argv.join(" "),
+            stderr: if out.stderr.is_empty() {
+                "(see output above)".into()
+            } else {
+                out.stderr
+            },
+        });
+    }
+    // The "installed" cache answers are now wrong.
+    for p in pkgs {
+        crate::cache::delete("provider", &format!("installed:repo:{p}"));
+        crate::cache::delete("provider", &format!("installed:aur:{p}"));
+    }
+    Ok(())
+}
+
+/// Human-readable size for display.
+pub fn human_size(bytes: u64) -> String {
+    let units = ["B", "KiB", "MiB", "GiB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < units.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", units[unit])
+    } else {
+        format!("{size:.1} {}", units[unit])
+    }
+}

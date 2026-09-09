@@ -1,4 +1,5 @@
 pub mod app;
+pub mod apps;
 pub mod backend;
 pub mod cache;
 pub mod cli;
@@ -9,6 +10,9 @@ pub mod exec;
 pub mod forfile;
 pub mod github;
 pub mod ledger;
+pub mod maintenance;
 pub mod recipe;
 pub mod resolver;
+pub mod security;
+pub mod state;
 pub mod ui;

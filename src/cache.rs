@@ -47,6 +47,36 @@ pub fn put(namespace: &str, key: &str, value: &str) {
     let _ = std::fs::write(&path, value);
 }
 
+/// Invalidate one cached entry — used after installs/uninstalls so stale
+/// `installed: false` answers don't survive the operation that changed them.
+pub fn delete(namespace: &str, key: &str) {
+    let _ = std::fs::remove_file(key_path(namespace, key));
+}
+
+/// Housekeeping: drop entries older than their TTL would allow (called on
+/// startup so caches can never grow unbounded).
+pub fn purge_expired(max_age: Duration) {
+    for ns in ["provider", "search"] {
+        let dir = cache_root().join(ns);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if let Ok(modified) = meta.modified()
+                && SystemTime::now()
+                    .duration_since(modified)
+                    .map(|age| age > max_age)
+                    .unwrap_or(false)
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+        }
+    }
+}
+
 /// Drop a cache namespace ("search", "recipes", "builds") or everything.
 pub fn clean(namespace: Option<&str>) -> std::io::Result<()> {
     match namespace {

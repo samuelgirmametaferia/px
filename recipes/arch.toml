@@ -105,3 +105,52 @@ tools = ["jdk-openjdk"]
 enabled = true
 tools = ["ruby"]
 runtime_deps = ["base-devel"]   # native gem extensions
+
+[maintenance.uninstall]
+argv = ["sudo", "pacman", "-Rs", "{pkgs...}"]
+elevated = true
+
+[maintenance.updates]
+argv = ["pacman", "-Qu"]
+parse = "name_version_lines"
+
+[maintenance.orphans]
+argv = ["pacman", "-Qtdq"]
+parse = "names_lines"
+
+[maintenance.installed_info]
+argv = ["pacman", "-Qi", "{pkgs...}"]
+parse = "pacman_qi"
+
+[maintenance.explicit]
+argv = ["pacman", "-Qeq"]
+parse = "names_lines"
+
+# apps with their own install channels (checked after sources, before github)
+[[apps]]
+match = ["claude-code", "claude", "claudecode"]
+label = "Claude Code"
+method = "npm"
+package = "@anthropic-ai/claude-code"
+require_any = ["npm"]
+
+[[apps]]
+match = ["codex", "openai-codex"]
+label = "OpenAI Codex CLI"
+method = "npm"
+package = "@openai/codex"
+require_any = ["npm"]
+
+[[apps]]
+match = ["bun", "bunjs"]
+label = "Bun"
+method = "script"
+url = "https://bun.sh/install"
+require_any = ["curl"]
+
+[[apps]]
+match = ["deno"]
+label = "Deno"
+method = "script"
+url = "https://deno.land/install.sh"
+require_any = ["curl"]

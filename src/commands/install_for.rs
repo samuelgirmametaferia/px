@@ -124,10 +124,23 @@ pub async fn run(app: App, path: &str) -> PxResult<()> {
 
     if !analysis.unmapped.is_empty() {
         println!();
+        let shown: Vec<&String> = analysis.unmapped.iter().take(10).collect();
+        let more = analysis.unmapped.len().saturating_sub(shown.len());
+        let more_note = if more > 0 {
+            format!(" (+{more} more)")
+        } else {
+            String::new()
+        };
         println!(
-            "  {} couldn't map (may be vendored or private): {}",
+            "  {} couldn't map (may be vendored or private): {}{more_note}",
             style.warn("⚠"),
-            style.dim(&analysis.unmapped.join(", "))
+            style.dim(
+                &shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         );
     }
     println!();

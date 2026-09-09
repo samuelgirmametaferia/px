@@ -1,4 +1,7 @@
+pub mod jokes;
+pub mod progress;
 pub mod prompt;
+pub mod spectrum;
 pub mod spinner;
 pub mod style;
 pub mod table;
