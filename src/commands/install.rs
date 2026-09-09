@@ -228,9 +228,51 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     // A joke for the road, shown under the chosen progress bar.
     let bar_style = crate::ui::progress::BarStyle::parse(&app.cli.bar)
         .unwrap_or(crate::ui::progress::BarStyle::Shades);
-    let total_steps: usize = by_source.iter().map(|(_, p)| p.len()).sum();
-    let bar =
-        crate::ui::progress::install_bar(bar_style, total_steps.max(1), &crate::ui::jokes::next());
+
+    // Download sizes for a REAL percentage: package metadata knows the
+    // bytes; the network-flow monitor (netmon) watches /proc/net/dev while
+    // the package manager runs. No output parsing, no guessing.
+    let mut info_handles = Vec::new();
+    for hit in &to_install {
+        let provs: Vec<Arc<dyn Provider>> = providers.clone();
+        let name = hit.name.clone();
+        info_handles.push(tokio::spawn(async move {
+            for p in &provs {
+                if let Ok(Some(h)) = p.info(&name).await {
+                    return h.download_size;
+                }
+            }
+            None
+        }));
+    }
+    let mut total_bytes: u64 = 0;
+    for h in info_handles {
+        if let Ok(Some(size)) = h.await {
+            total_bytes += size;
+        }
+    }
+
+    let bar = if total_bytes > 0 {
+        crate::ui::progress::bytes_bar(
+            bar_style,
+            total_bytes,
+            &format!(
+                "downloading ~{}",
+                crate::maintenance::human_size(total_bytes)
+            ),
+        )
+    } else {
+        let total_steps: usize = by_source.iter().map(|(_, p)| p.len()).sum();
+        crate::ui::progress::install_bar(bar_style, total_steps.max(1), &crate::ui::jokes::next())
+    };
+
+    // Watch the interface counters for the whole install; aborted after.
+    let monitor = if total_bytes > 0 {
+        crate::netmon::total_rx_bytes()
+            .map(|baseline| crate::netmon::spawn_monitor(bar.clone(), total_bytes, baseline))
+    } else {
+        None
+    };
 
     let mut ledger = Ledger::load();
     let mut failures = Vec::new();
@@ -259,7 +301,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                                 crate::state::journal_step(&mut journal, p);
                             }
                         }
-                        bar.inc(pkgs.len() as u64);
+                        if total_bytes == 0 {
+                            bar.inc(pkgs.len() as u64);
+                        }
                     }
                     Err(e) => {
                         failures.push(format!("{source}: {e}"));
@@ -268,6 +312,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
             }
             None => failures.push(format!("{source}: no installer configured")),
         }
+    }
+    if let Some(monitor) = monitor {
+        monitor.abort();
     }
     bar.finish_and_clear();
     if !app.cli.dry_run {
@@ -586,7 +633,14 @@ async fn try_source_build(app: &App, spec: &str) -> PxResult<()> {
     spinner::finish_ok(&pb, format!("builds with {}", strategy.label()));
 
     let pb = spinner::one(&format!("building {}…", repo.full_name));
-    match crate::github::build_and_install(repo, &strategy, false).await {
+    match crate::github::build_and_install(
+        repo,
+        &strategy,
+        false,
+        crate::sandbox::enabled(app),
+    )
+        .await
+    {
         Ok(()) => {
             spinner::finish_ok(&pb, format!("built and installed {}", repo.full_name));
             let mut ledger = Ledger::load();

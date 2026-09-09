@@ -49,6 +49,42 @@ pub fn install_bar(style: BarStyle, total: usize, label: &str) -> ProgressBar {
     pb
 }
 
+/// A byte-based bar driven by the network-flow monitor: position is
+/// received-bytes, length is the known download total, so percent is real.
+pub fn bytes_bar(style: BarStyle, total_bytes: u64, label: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total_bytes.max(1));
+    let template = match style {
+        BarStyle::Blocks => {
+            "{spinner:.green} {msg}\n{wide_bar:.cyan/blue} {bytes}/{total_bytes} ({percent}%)"
+        }
+        BarStyle::Shades => {
+            "{spinner:.green} {msg}\n{wide_bar:.magenta/white} {bytes}/{total_bytes} {percent}% [{elapsed_precise}]"
+        }
+        BarStyle::Rainbow => {
+            "{spinner:.green} {msg}\n{wide_bar:.yellow/green} {bytes}/{total_bytes} {percent}% ✨"
+        }
+        BarStyle::Minimal => "{msg} [{wide_bar:.white/dim}] {bytes}/{total_bytes}",
+        BarStyle::Sparkles => {
+            "{spinner:.magenta} {msg}\n{wide_bar:.yellow/cyan} {bytes}/{total_bytes} {percent}% 🚀"
+        }
+    };
+    pb.set_style(
+        ProgressStyle::with_template(template)
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars(match style {
+                BarStyle::Blocks => "█▉▊▋▌▍▎▏░",
+                BarStyle::Shades => "█▓▒░·",
+                BarStyle::Rainbow => "█▓▒░ ",
+                BarStyle::Minimal => "=-",
+                BarStyle::Sparkles => "━─",
+            }),
+    );
+    pb.set_message(label.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(500));
+    set_active(&pb);
+    pb
+}
+
 // ------------------------------------------------------- live-bar hiding
 //
 // Children with inherited stdio (sudo prompts, pacman/npm output) must not

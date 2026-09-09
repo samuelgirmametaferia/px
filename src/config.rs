@@ -16,6 +16,8 @@ pub struct Config {
     pub default_mode: String,
     /// Disable GitHub source-build fallback globally.
     pub source_enabled: bool,
+    /// Sandbox mode: "auto" (on when bwrap exists), "on", "off".
+    pub sandbox: String,
     pub cache_search_secs: u64,
 }
 
@@ -26,6 +28,7 @@ impl Default for Config {
             recipe_branch: "main".into(),
             default_mode: "ask".into(),
             source_enabled: true,
+            sandbox: "auto".into(),
             cache_search_secs: 3600,
         }
     }

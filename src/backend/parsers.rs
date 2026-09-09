@@ -21,9 +21,11 @@ fn parse_paragraph(text: &str) -> Vec<Vec<(String, String)>> {
         }
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
-            // Heuristic: a key is short and has no spaces; otherwise this is
-            // a description line containing a colon.
-            if !k.is_empty() && !k.contains(' ') && k.len() < 40 {
+            // Multi-word keys exist ("Download Size", "Installed Size"), so
+            // the guard is: short-ish key, and the line isn't indented —
+            // description continuation lines in apt/dnf/zypper are indented
+            // and may contain colons.
+            if !k.is_empty() && k.len() < 40 && !line.starts_with(' ') {
                 current.push((k.to_string(), v.trim().to_string()));
             }
         }
@@ -55,12 +57,15 @@ fn hit_from_block(block: &[(String, String)], source: &str) -> Option<PackageHit
         .map(|s| s.trim())
         .find(|s| !s.is_empty())
         .map(|s| s.to_string());
+    // Download Size drives the network-flow progress estimate.
+    let download_size = field(block, "Download Size").and_then(human_size_bytes);
     Some(PackageHit {
         name,
         version,
         description,
         source: source.to_string(),
         score: 0,
+        download_size,
     })
 }
 
@@ -78,6 +83,7 @@ pub fn pacman_search(text: &str, source: &str) -> Vec<PackageHit> {
             description: None,
             source: source.to_string(),
             score: 0,
+            download_size: None,
         })
         .collect()
 }
@@ -117,6 +123,7 @@ pub fn pacman_files(text: &str, source: &str) -> Vec<PackageHit> {
                 description: None,
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -135,6 +142,7 @@ pub fn apt_search(text: &str, source: &str) -> Vec<PackageHit> {
                 description: Some(desc.trim().to_string()),
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -159,6 +167,7 @@ pub fn apt_file_search(text: &str, source: &str) -> Vec<PackageHit> {
                 description: None,
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -200,6 +209,7 @@ pub fn dnf_search(text: &str, source: &str) -> Vec<PackageHit> {
                 description: desc,
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -228,6 +238,7 @@ pub fn dnf_provides(text: &str, source: &str) -> Vec<PackageHit> {
                 description: None,
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -246,6 +257,7 @@ pub fn copr_search(text: &str, source: &str) -> Vec<PackageHit> {
             description: None,
             source: source.to_string(),
             score: 0,
+            download_size: None,
         })
         .collect()
 }
@@ -283,6 +295,7 @@ pub fn zypper_search(text: &str, source: &str) -> Vec<PackageHit> {
                 name,
                 source: source.to_string(),
                 score: 0,
+                download_size: None,
             })
         })
         .collect()
@@ -505,6 +518,7 @@ pub fn pacman_ssearch(text: &str, source: &str) -> Vec<PackageHit> {
             description,
             source: source.to_string(),
             score: 0,
+            download_size: None,
         });
     }
     hits
@@ -526,5 +540,6 @@ fn push_header(line: &str, source: &str, hits: &mut Vec<PackageHit>) {
         description: None,
         source: source.to_string(),
         score: 0,
+        download_size: None,
     });
 }

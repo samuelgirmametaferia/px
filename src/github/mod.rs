@@ -152,7 +152,7 @@ pub fn detect_strategy(dir: &Path) -> Option<Strategy> {
     }
 }
 
-async fn run_in(dir: &Path, argv: &[&str], dry_run: bool) -> PxResult<()> {
+async fn run_in(dir: &Path, argv: &[&str], dry_run: bool, sandbox: bool) -> PxResult<()> {
     if dry_run {
         let prefix = if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
             "\x1b[1;33m[dry-run]\x1b[0m"
@@ -163,9 +163,21 @@ async fn run_in(dir: &Path, argv: &[&str], dry_run: bool) -> PxResult<()> {
         return Ok(());
     }
     crate::ui::prompt::flush();
-    let status = tokio::process::Command::new(argv[0])
-        .args(&argv[1..])
+    // Build steps run sandboxed (system read-only, home writable) — the
+    // project's build scripts are untrusted code. Sudo install steps are
+    // never sandboxed: they're the explicit, user-confirmed system writes.
+    let mut cmd = tokio::process::Command::new(argv[0]);
+    if sandbox && argv[0] != "sudo" {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        let wrapped = crate::sandbox::wrap_argv(&owned, &[dir.display().to_string()]);
+        cmd = tokio::process::Command::new(&wrapped[0]);
+        cmd.args(&wrapped[1..]);
+    } else {
+        cmd.args(&argv[1..]);
+    }
+    let status = cmd
         .current_dir(dir)
+        .kill_on_drop(true)
         .status()
         .await
         .map_err(|e| PxError::Command {
@@ -184,7 +196,12 @@ async fn run_in(dir: &Path, argv: &[&str], dry_run: bool) -> PxResult<()> {
 
 /// Build + install a cloned repo with its own build system. The dedicated
 /// confirmation happened before this is called — never inside.
-pub async fn build_and_install(repo: &RepoHit, strategy: &Strategy, dry_run: bool) -> PxResult<()> {
+pub async fn build_and_install(
+    repo: &RepoHit,
+    strategy: &Strategy,
+    dry_run: bool,
+    sandbox: bool,
+) -> PxResult<()> {
     let dir = clone(repo).await?;
     if !dry_run {
         let detected = detect_strategy(&dir);
@@ -206,40 +223,53 @@ pub async fn build_and_install(repo: &RepoHit, strategy: &Strategy, dry_run: boo
                 )));
             }
         };
-        build_with(&dir, strategy, dry_run).await
+        build_with(&dir, strategy, dry_run, sandbox).await
     } else {
-        build_with(&dir, strategy, dry_run).await
+        build_with(&dir, strategy, dry_run, sandbox).await
     }
 }
 
-async fn build_with(dir: &Path, strategy: &Strategy, dry_run: bool) -> PxResult<()> {
+async fn build_with(dir: &Path, strategy: &Strategy, dry_run: bool, sandbox: bool) -> PxResult<()> {
     match strategy {
         Strategy::Cargo => {
-            run_in(dir, &["cargo", "build", "--release"], dry_run).await?;
+            run_in(dir, &["cargo", "build", "--release"], dry_run, sandbox).await?;
             run_in(
                 dir,
                 &["cargo", "install", "--path", ".", "--force"],
                 dry_run,
+                sandbox,
             )
             .await
         }
         Strategy::Go => {
-            run_in(dir, &["go", "build", "./..."], dry_run).await?;
-            run_in(dir, &["go", "install", "./..."], dry_run).await
+            run_in(dir, &["go", "build", "./..."], dry_run, sandbox).await?;
+            run_in(dir, &["go", "install", "./..."], dry_run, sandbox).await
         }
         Strategy::CMake => {
-            run_in(dir, &["cmake", "-B", "build"], dry_run).await?;
-            run_in(dir, &["make", "-C", "build"], dry_run).await?;
-            run_in(dir, &["sudo", "make", "-C", "build", "install"], dry_run).await
+            run_in(dir, &["cmake", "-B", "build"], dry_run, sandbox).await?;
+            run_in(dir, &["make", "-C", "build"], dry_run, sandbox).await?;
+            run_in(
+                dir,
+                &["sudo", "make", "-C", "build", "install"],
+                dry_run,
+                sandbox,
+            )
+            .await
         }
         Strategy::Make => {
-            run_in(dir, &["make"], dry_run).await?;
-            run_in(dir, &["sudo", "make", "install"], dry_run).await
+            run_in(dir, &["make"], dry_run, sandbox).await?;
+            run_in(dir, &["sudo", "make", "install"], dry_run, sandbox).await
         }
         Strategy::Meson => {
-            run_in(dir, &["meson", "setup", "build"], dry_run).await?;
-            run_in(dir, &["ninja", "-C", "build"], dry_run).await?;
-            run_in(dir, &["sudo", "ninja", "-C", "build", "install"], dry_run).await
+            run_in(dir, &["meson", "setup", "build"], dry_run, sandbox).await?;
+            run_in(dir, &["ninja", "-C", "build"], dry_run, sandbox).await?;
+            run_in(
+                dir,
+                &["sudo", "ninja", "-C", "build", "install"],
+                dry_run,
+                sandbox,
+            )
+            .await
         }
     }
 }

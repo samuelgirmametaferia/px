@@ -74,15 +74,22 @@ fn build_install(def: &AppDef) -> Option<AppInstall> {
 /// Execute an app install. `force` adds npm's `--force` (used when a
 /// previous install left the binary in place and the user chose to
 /// overwrite). Script installs show their pipe command verbatim.
-pub async fn install(_app: &App, install: &AppInstall, dry_run: bool, force: bool) -> PxResult<()> {
+/// npm installs and installer scripts run inside the px sandbox when
+/// enabled (see sandbox.rs) — install scripts are the classic attack
+/// vector, so the system stays read-only under them.
+pub async fn install(app: &App, install: &AppInstall, dry_run: bool, force: bool) -> PxResult<()> {
     match install {
         AppInstall::Npm { package, .. } => {
-            let mut argv: Vec<&str> = vec!["npm", "install", "-g"];
-            if force {
-                argv.push("--force");
+            if dry_run {
+                println!("[dry-run] npm install -g {package}");
+                return Ok(());
             }
-            argv.push(package);
-            run(&argv, dry_run).await
+            let mut argv: Vec<String> = vec!["npm".into(), "install".into(), "-g".into()];
+            if force {
+                argv.push("--force".into());
+            }
+            argv.push(package.clone());
+            run_sandboxed(app, &argv).await
         }
         AppInstall::Script { url, .. } => {
             // Show exactly what runs — curl | sh is a trust decision.
@@ -93,6 +100,19 @@ pub async fn install(_app: &App, install: &AppInstall, dry_run: bool, force: boo
                 return Ok(());
             }
             crate::ui::prompt::flush();
+            // Sandboxed when possible: curl|sh with the system read-only.
+            if crate::sandbox::enabled(app) && crate::sandbox::bwrap_available() {
+                let argv = vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("{curl} -fsSL {url} | {sh}"),
+                ];
+                let out = crate::sandbox::run_sandboxed(app, &argv, &[]).await?;
+                if out.success() {
+                    return Ok(());
+                }
+                return Err(PxError::User("installer script failed".into()));
+            }
             let mut curl_proc = tokio::process::Command::new(&curl)
                 .args(["-fsSL", url])
                 .stdout(std::process::Stdio::piped())
@@ -107,6 +127,7 @@ pub async fn install(_app: &App, install: &AppInstall, dry_run: bool, force: boo
                 .map_err(|e| PxError::User(format!("pipe error: {e}")))?;
             let sh_proc = tokio::process::Command::new(&sh)
                 .stdin(std::process::Stdio::from(fd))
+                .kill_on_drop(true)
                 .status()
                 .await
                 .map_err(|e| PxError::User(format!("cannot run sh: {e}")))?;
@@ -120,14 +141,32 @@ pub async fn install(_app: &App, install: &AppInstall, dry_run: bool, force: boo
     }
 }
 
-async fn run(argv: &[&str], dry_run: bool) -> PxResult<()> {
-    if dry_run {
-        println!("[dry-run] {}", argv.join(" "));
-        return Ok(());
+/// Run an npm-style argv, sandboxed when enabled; streamed output on
+/// failure (npm errors go to stderr which we capture).
+async fn run_sandboxed(app: &App, argv: &[String]) -> PxResult<()> {
+    if crate::sandbox::enabled(app) {
+        let out = crate::sandbox::run_sandboxed(app, argv, &[]).await?;
+        if out.success() {
+            return Ok(());
+        }
+        let combined = format!("{}{}", out.stdout, out.stderr);
+        if !combined.trim().is_empty() {
+            let lines: Vec<&str> = combined.lines().collect();
+            let start = lines.len().saturating_sub(15);
+            for line in &lines[start..] {
+                eprintln!("  {line}");
+            }
+        }
+        return Err(PxError::Command {
+            cmd: argv.join(" "),
+            stderr: "(see output above)".to_string(),
+        });
     }
+    // unsandboxed fallback: run with inherited stdio like before
     crate::ui::prompt::flush();
-    let status = tokio::process::Command::new(argv[0])
+    let status = tokio::process::Command::new(&argv[0])
         .args(&argv[1..])
+        .kill_on_drop(true)
         .status()
         .await
         .map_err(|e| PxError::Command {

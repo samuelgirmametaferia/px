@@ -59,6 +59,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub tutorial: bool,
 
+    /// Force sandboxing of risky installs (npm, install.sh, source builds).
+    #[arg(long, global = true, conflicts_with = "no_sandbox")]
+    pub sandbox: bool,
+
+    /// Disable the sandbox for this run.
+    #[arg(long, global = true)]
+    pub no_sandbox: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

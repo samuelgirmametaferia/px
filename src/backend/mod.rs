@@ -22,6 +22,10 @@ pub struct PackageHit {
     /// Fuzzy score, populated by the resolver (higher = better).
     #[serde(default)]
     pub score: i64,
+    /// Download size in bytes, when the package manager reports it — drives
+    /// the network-flow progress estimate during installs.
+    #[serde(default)]
+    pub download_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

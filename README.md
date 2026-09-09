@@ -133,6 +133,20 @@ Global flags: `-y/--yes`, `--dry-run`, `--local/--global`, `--no-source`,
 - **Self-cleaning caches**, a **first-run spectrum animation**, **jokes
   during installs** (fresh from the internet, cached offline), and
   **five progress bar styles** (`--bar blocks|shades|rainbow|minimal|sparkles`).
+- **The px sandbox.** npm installs (postinstall scripts are the classic
+  supply-chain vector), `curl | sh` installer scripts, and GitHub source
+  builds run inside a bubblewrap container with the **system read-only** —
+  a malicious install script can write your home (it has to install
+  somewhere) but cannot touch `/usr`, `/etc`, or `/boot`, and runs in
+  isolated pid/ipc namespaces. System package installs aren't sandboxed —
+  mutating the system is their job, guarded by sudo and your confirmation.
+  `--sandbox`/`--no-sandbox` or `sandbox = auto|on|off` in the config;
+  `px doctor` shows its status. `px install bubblewrap` sets it up.
+- **Real percentages.** px knows the total download size from package
+  metadata and watches the network interface counters (`/proc/net/dev`)
+  while the package manager runs — RX bytes ÷ total = the percentage on
+  the bar, no output parsing. A small noise floor is subtracted for
+  ambient traffic.
 - **Hang-proof by construction.** Every query (search, info, installed
   checks, recipe fetch, GitHub/npm APIs) has a hard timeout; children die
   with px (`kill_on_drop`); the sudo password is always asked *before* any

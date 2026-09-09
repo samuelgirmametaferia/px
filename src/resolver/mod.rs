@@ -85,6 +85,7 @@ pub async fn resolve_spec(
                 description: None,
                 source: providers[0].source_id().to_string(),
                 score: 0,
+                download_size: None,
             });
         }
 

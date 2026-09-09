@@ -202,3 +202,16 @@ Install Date    : Thu 05 Sep 2026 10:12:33 AM PDT
     assert_eq!(size, 1028290);
     assert!(date.unwrap().contains("05 Sep 2026"));
 }
+
+#[test]
+fn pacman_info_extracts_download_size() {
+    let hits = p::pacman_info(&fixture("pacman/si-python-flask.txt"), "repo");
+    let flask = hits.iter().find(|h| h.name == "python-flask").unwrap();
+    // Download Size drives the network-flow progress bar
+    assert!(
+        flask.download_size.is_some(),
+        "download size must be parsed: {:?}",
+        flask.download_size
+    );
+    assert!(flask.download_size.unwrap() > 0);
+}
