@@ -31,7 +31,7 @@ done | jq -r '.items[]? | .full_name' | sort -u | while read -r repo; do
     [ -n "$installer_url" ] || { echo "no installer url in readme: $repo" >&2; continue; }
     echo "candidate: $repo" >&2
     bin=$(echo "$repo" | cut -d/ -f2)
-    jq -n --arg cid "github:$repo" --arg repo "$repo" \
+    jq -nc --arg cid "github:$repo" --arg repo "$repo" \
         --arg url "$installer_url" --arg bin "$bin" \
         '{canonical_id: $cid, aliases: [$bin],
           repository: ("https://github.com/" + $repo),

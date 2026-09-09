@@ -81,9 +81,11 @@ pub async fn run(app: App) -> PxResult<()> {
         );
     }
 
-    let cands: Vec<Candidate> = text
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
+    // tolerant of BOTH jsonl and pretty-printed multi-line json (the
+    // discovery script once emitted the latter; old branches still have it)
+    let cands: Vec<Candidate> = serde_json::Deserializer::from_str(&text)
+        .into_iter()
+        .filter_map(|r| r.ok())
         .collect();
 
     if cands.is_empty() {
