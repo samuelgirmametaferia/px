@@ -1,0 +1,88 @@
+# px recipe — openSUSE / SUSE family (Tumbleweed, Leap, MicroOS, SLES)
+#
+# zypper does everything. Same shape as the other recipes — only strings
+# differ (python3-numpy, libopenssl-devel, ...).
+
+[meta]
+id = "opensuse"
+name = "openSUSE / SUSE"
+version = 1
+
+[[detection]]
+os_release = { id = "opensuse-tumbleweed" }
+
+[[detection]]
+os_release = { id = "opensuse-leap" }
+
+[[detection]]
+os_release = { id = "microos" }
+
+[[detection]]
+os_release = { id_like = "suse" }
+
+[[detection]]
+command = "zypper"
+
+[[sources]]
+id = "repo"
+label = "zypper"
+require_any = ["zypper"]
+
+[sources.search]
+argv = ["zypper", "--non-interactive", "se", "-t", "package", "{pkg}"]
+parse = "zypper_search"
+
+[sources.info]
+argv = ["zypper", "--non-interactive", "info", "{pkg}"]
+parse = "zypper_info"
+
+[sources.installed]
+argv = ["rpm", "-q", "{pkg}"]
+
+[sources.install]
+argv = ["sudo", "zypper", "--non-interactive", "install", "{pkgs...}"]
+elevated = true
+
+[sources.provides]
+argv = ["zypper", "--non-interactive", "se", "-f", "{pkg}"]
+parse = "zypper_provides"
+
+[github]
+enabled = true
+min_stars = 5
+strategies = ["cargo", "go", "cmake", "make", "meson"]
+
+[ecosystems.python]
+enabled = true
+prefix = "python3-{name}"
+tools = ["python3", "python3-pip"]
+runtime_deps = ["gcc", "make", "rpm-build"]
+overrides = { cv2 = "python3-opencv", PIL = "python3-Pillow", yaml = "python3-PyYAML", bs4 = "python3-beautifulsoup4", numpy = "python3-numpy", cryptography = "python3-cryptography" }
+
+[ecosystems.node]
+enabled = true
+tools = ["nodejs-default", "npm-default"]
+runtime_deps = ["gcc", "make", "python3"]
+
+[ecosystems.c]
+enabled = true
+tools = ["gcc", "make", "pkgconf"]
+header_map = { "openssl" = "libopenssl-devel", "curl" = "libcurl-devel", "zlib" = "zlib-devel", "sqlite3" = "sqlite3-devel", "postgresql" = "postgresql13-devel", "readline" = "readline-devel", "alsa" = "alsa-devel", "pulse" = "pulseaudio-devel", "gtk" = "gtk3-devel", "gtk4" = "gtk4-devel", "SDL2" = "libSDL2-devel", "boost" = "libboost-devel", "ffmpeg" = "ffmpeg-6-devel", "uv" = "libuv-devel", "jpeg" = "libjpeg8-devel", "png" = "libpng16-devel", "zstd" = "libzstd-devel", "lzma" = "xz-devel", "bz2" = "libbz2-devel", "event" = "libevent-devel", "xml2" = "libxml2-devel", "xslt" = "libxslt-devel" }
+
+[ecosystems.shell]
+enabled = true
+overrides = { ffmpeg = "ffmpeg-6", jq = "jq", yq = "yq", docker = "docker", inotifywait = "inotify-tools", convert = "ImageMagick", identify = "ImageMagick", xclip = "xclip", wl-copy = "wl-clipboard", playerctl = "playerctl", pactl = "pulseaudio-utils", bluetoothctl = "bluez" }
+
+[ecosystems.go]
+enabled = true
+tools = ["go"]
+runtime_deps = ["gcc"]
+
+[ecosystems.java]
+enabled = true
+tools = ["java-21-openjdk-devel"]
+
+[ecosystems.ruby]
+enabled = true
+tools = ["ruby"]
+runtime_deps = ["gcc", "make", "ruby-devel"]

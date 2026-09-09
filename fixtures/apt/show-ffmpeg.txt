@@ -1,0 +1,8 @@
+Package: ffmpeg
+Version: 7:7.0.2-3
+Description: Tools for transcoding, streaming and playing of multimedia files
+ Section: video
+
+Package: libffmpeg-dev
+Version: 7:7.0.2-3
+Description: Development files for ffmpeg

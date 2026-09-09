@@ -1,0 +1,12 @@
+Information for package ffmpeg:
+--------------------------------
+
+Repository     : Main Repository (OSS)
+Name           : ffmpeg
+Version        : 6.1.1-4.1
+Arch           : x86_64
+Vendor         : openSUSE
+Installed Size : 2.4 MiB
+Summary        : Library and tools for audio and video conversion
+Description    :
+    Complete solution to record, convert and stream audio and video.

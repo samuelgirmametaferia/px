@@ -1,0 +1,9 @@
+Loading repository data...
+Reading installed packages...
+
+S  | Name        | Type       | Version    | Arch   | Repository
+---+-------------+------------+------------+--------+-------------------------------------------
+i+ | ffmpeg      | package    | 6.1.1-4.1  | x86_64 | Main Repository (OSS)
+   | ffmpeg-6    | package    | 6.1.1-4.1  | x86_64 | Main Repository (OSS)
+v  | ffmpeg-7    | package    | 7.0.2-2.1  | x86_64 | Main Repository (OSS)
+   | ffmpeg      | srcpackage | 6.1.1-4.1  | noarch | Main Repository (OSS)

@@ -1,0 +1,107 @@
+# px recipe — Arch Linux (and derivatives: CachyOS, EndeavourOS, Manjaro...)
+#
+# px drives the tools this machine already has. Sources are checked in
+# parallel, in this order: repo (pacman) → aur (paru or yay, if installed).
+# If the user has no AUR helper, px says so instead of reimplementing one.
+
+[meta]
+id = "arch"
+name = "Arch Linux"
+version = 1
+
+# ---------------------------------------------------------------- detection
+[[detection]]
+os_release = { id = "arch" }
+
+[[detection]]
+os_release = { id_like = "arch" }   # CachyOS, EndeavourOS, Garuda...
+
+[[detection]]
+command = "pacman"
+
+# ------------------------------------------------------------------ sources
+[[sources]]
+id = "repo"
+label = "official repos"
+require_any = ["pacman"]
+
+[sources.search]
+argv = ["pacman", "-Ssq", "{pkg}"]
+parse = "pacman_search"
+
+[sources.info]
+argv = ["pacman", "-Si", "{pkg}"]
+parse = "pacman_info"
+
+[sources.installed]
+argv = ["pacman", "-Q", "{pkg}"]
+
+[sources.install]
+argv = ["sudo", "pacman", "-S", "--needed", "{pkgs...}"]
+elevated = true
+
+[sources.provides]
+argv = ["pacman", "-F", "{pkg}"]
+parse = "pacman_files"
+
+# AUR through whichever helper the user has. px never talks to the AUR itself.
+[[sources]]
+id = "aur"
+label = "AUR"
+require_any = ["paru", "yay"]
+
+[sources.search]
+argv = ["{helper}", "-Ssq", "--aur", "{pkg}"]
+parse = "helper_search"
+
+[sources.info]
+argv = ["{helper}", "-Sia", "{pkg}"]
+parse = "helper_info"
+
+[sources.installed]
+argv = ["pacman", "-Q", "{pkg}"]
+
+[sources.install]
+argv = ["{helper}", "-S", "--needed", "--noconfirm", "{pkgs...}"]
+
+# ------------------------------------------------------------------ github
+[github]
+enabled = true
+min_stars = 5
+strategies = ["cargo", "go", "cmake", "make", "meson"]
+
+# -------------------------------------------------------------- ecosystems
+[ecosystems.python]
+enabled = true
+prefix = "python-{name}"
+tools = ["python", "python-pip"]
+runtime_deps = ["base-devel"]
+overrides = { cv2 = "python-opencv", PIL = "python-pillow", yaml = "python-yaml", bs4 = "python-beautifulsoup4", OpenSSL = "python-pyopenssl", cryptography = "python-cryptography", git = "python-gitpython", cairo = "python-cairo", magic = "python-magic" }
+
+[ecosystems.node]
+enabled = true
+tools = ["nodejs", "npm"]
+runtime_deps = ["base-devel", "python"]   # node-gyp needs python + a compiler
+
+[ecosystems.c]
+enabled = true
+tools = ["gcc", "make", "pkgconf"]
+header_map = { "openssl" = "openssl", "curl" = "curl", "zlib" = "zlib", "sqlite3" = "sqlite", "postgresql" = "postgresql-libs", "readline" = "readline", "alsa" = "alsa-lib", "pulse" = "libpulse", "gtk" = "gtk3", "gtk4" = "gtk4", "SDL2" = "sdl2", "SDL" = "sdl2", "boost" = "boost", "ffmpeg" = "ffmpeg", "libav" = "ffmpeg", "uv" = "libuv", "jpeg" = "libjpeg-turbo", "png" = "libpng", "zstd" = "zstd", "lzma" = "xz", "bz2" = "bzip2", "mpfr" = "mpfr", "gmp" = "gmp", "mpc" = "libmpc", "event" = "libevent", "ev" = "libev", "gcrypt" = "libgcrypt", "gpg-error" = "libgpg-error", "xml2" = "libxml2", "xslt" = "libxslt", "curlpp" = "libcurlpp" }
+
+[ecosystems.shell]
+enabled = true
+overrides = { ffmpeg = "ffmpeg", jq = "jq", yq = "go-yq", docker = "docker", inotifywait = "inotify-tools", convert = "imagemagick", identify = "imagemagick", xclip = "xclip", wl-copy = "wl-clipboard", playerctl = "playerctl", pactl = "libpulse", bluetoothctl = "bluez-utils" }
+
+[ecosystems.go]
+enabled = true
+tools = ["go"]
+runtime_deps = ["gcc"]   # CGO (net, os/user)
+
+[ecosystems.java]
+enabled = true
+tools = ["jdk-openjdk"]
+
+[ecosystems.ruby]
+enabled = true
+tools = ["ruby"]
+runtime_deps = ["base-devel"]   # native gem extensions

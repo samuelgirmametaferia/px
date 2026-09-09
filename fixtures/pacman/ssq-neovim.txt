@@ -1,0 +1,14 @@
+bob
+neovide
+neovim
+neovim-decasify
+neovim-qt
+neovim-git
+neovim-nightly-bin
+bob
+neovide
+neovim
+neovim-decasify
+neovim-lspconfig
+neovim-qt
+python-pynvim

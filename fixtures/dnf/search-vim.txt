@@ -1,0 +1,5 @@
+Last metadata expiration check: 2:31:42 ago on Tue Sep  9 06:30:11 2026.
+=============== Name Exactly Matched: vim ===============
+vim-enhanced.x86_64 : The latest version of the VIM editor
+=============== Name & Summary Matched: vim ===============
+vim-common.x86_64 : The common files needed by any version of the VIM editor

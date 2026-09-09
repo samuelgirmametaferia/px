@@ -1,0 +1,96 @@
+# px recipe — Fedora Linux (and RPM Fusion users)
+#
+# dnf does everything; COPR is reached through `dnf copr` (dnf's own plugin),
+# not by px talking to the COPR API.
+
+[meta]
+id = "fedora"
+name = "Fedora Linux"
+version = 1
+
+[[detection]]
+os_release = { id = "fedora" }
+
+[[detection]]
+os_release = { id_like = "fedora" }
+
+[[detection]]
+command = "dnf"
+
+[[sources]]
+id = "repo"
+label = "dnf"
+require_any = ["dnf"]
+
+[sources.search]
+argv = ["dnf", "-q", "search", "{pkg}"]
+parse = "dnf_search"
+
+[sources.info]
+argv = ["dnf", "-q", "info", "{pkg}"]
+parse = "dnf_info"
+
+[sources.installed]
+argv = ["rpm", "-q", "{pkg}"]
+
+[sources.install]
+argv = ["sudo", "dnf", "install", "-y", "{pkgs...}"]
+elevated = true
+
+[sources.provides]
+argv = ["dnf", "-q", "provides", "{pkg}"]
+parse = "dnf_provides"
+
+# COPR through dnf's own plugin (dnf-plugins-core). Inactive without it.
+[[sources]]
+id = "copr"
+label = "COPR"
+require_any = ["dnf"]
+
+[sources.search]
+argv = ["dnf", "-q", "copr", "search", "{pkg}"]
+parse = "copr_search"
+
+[sources.install]
+argv = ["sudo", "dnf", "copr", "enable", "-y", "{pkg}"]
+elevated = true
+
+[github]
+enabled = true
+min_stars = 5
+strategies = ["cargo", "go", "cmake", "make", "meson"]
+
+[ecosystems.python]
+enabled = true
+prefix = "python3-{name}"
+tools = ["python3", "python3-pip"]
+runtime_deps = ["gcc", "make", "rpmdevtools"]
+overrides = { cv2 = "python3-opencv", PIL = "python3-pillow", yaml = "python3-pyyaml", bs4 = "python3-beautifulsoup4", cryptography = "python3-cryptography", numpy = "python3-numpy" }
+
+[ecosystems.node]
+enabled = true
+tools = ["nodejs", "npm"]
+runtime_deps = ["gcc", "make", "python3"]
+
+[ecosystems.c]
+enabled = true
+tools = ["gcc", "make", "pkgconf"]
+header_map = { "openssl" = "openssl-devel", "curl" = "libcurl-devel", "zlib" = "zlib-devel", "sqlite3" = "sqlite-devel", "postgresql" = "libpq-devel", "readline" = "readline-devel", "alsa" = "alsa-lib-devel", "pulse" = "pulseaudio-libs-devel", "gtk" = "gtk3-devel", "gtk4" = "gtk4-devel", "SDL2" = "SDL2-devel", "boost" = "boost-devel", "ffmpeg" = "ffmpeg-devel", "uv" = "libuv-devel", "jpeg" = "libjpeg-turbo-devel", "png" = "libpng-devel", "zstd" = "libzstd-devel", "lzma" = "xz-devel", "bz2" = "bzip2-devel", "event" = "libevent-devel", "xml2" = "libxml2-devel", "xslt" = "libxslt-devel" }
+
+[ecosystems.shell]
+enabled = true
+overrides = { ffmpeg = "ffmpeg", jq = "jq", yq = "yq", docker = "docker-ce", inotifywait = "inotify-tools", convert = "ImageMagick", identify = "ImageMagick", xclip = "xclip", wl-copy = "wl-clipboard", playerctl = "playerctl", pactl = "pulseaudio-utils", bluetoothctl = "bluez-utils" }
+
+[ecosystems.go]
+enabled = true
+tools = ["golang"]
+runtime_deps = ["gcc"]
+
+[ecosystems.java]
+enabled = true
+tools = ["java-openjdk"]
+
+[ecosystems.ruby]
+enabled = true
+tools = ["ruby"]
+runtime_deps = ["gcc", "make", "ruby-devel"]

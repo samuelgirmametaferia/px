@@ -1,0 +1,3 @@
+ffmpeg - Complete solution to record, convert and stream audio and video
+libffmpeg-dev - Development files for libffmpeg
+ffmpeg-doc - Documentation for ffmpeg

@@ -1,0 +1,98 @@
+# px recipe — Debian / Ubuntu family (Debian, Ubuntu, Pop!_OS, Mint...)
+#
+# Same shape as arch.toml — only the strings differ. apt does everything;
+# PPAs are reached through add-apt-repository (apt's own tooling), not by
+# px talking to Launchpad.
+
+[meta]
+id = "debian"
+name = "Debian / Ubuntu family"
+version = 1
+
+[[detection]]
+os_release = { id = "debian" }
+
+[[detection]]
+os_release = { id_like = "debian" }   # ubuntu, pop, mint, elementary...
+
+[[detection]]
+command = "apt"
+
+[[sources]]
+id = "repo"
+label = "apt"
+require_any = ["apt"]
+
+[sources.search]
+argv = ["apt-cache", "search", "{pkg}"]
+parse = "apt_search"
+
+[sources.info]
+argv = ["apt-cache", "show", "{pkg}"]
+parse = "apt_info"
+
+[sources.installed]
+argv = ["dpkg", "-s", "{pkg}"]
+
+[sources.install]
+argv = ["sudo", "apt-get", "install", "-y", "{pkgs...}"]
+elevated = true
+
+[sources.provides]
+argv = ["apt-file", "search", "{pkg}"]
+parse = "apt_file_search"
+
+# PPAs via apt's own tooling (only useful on Ubuntu-family; add-apt-repository
+# is absent on pure Debian, in which case this source is simply inactive).
+[[sources]]
+id = "ppa"
+label = "PPA"
+require_any = ["add-apt-repository"]
+
+[sources.search]
+argv = ["apt-cache", "search", "{pkg}"]
+parse = "apt_search"
+
+[sources.install]
+argv = ["sudo", "add-apt-repository", "-y", "{pkg}"]
+elevated = true
+
+[github]
+enabled = true
+min_stars = 5
+strategies = ["cargo", "go", "cmake", "make"]
+
+[ecosystems.python]
+enabled = true
+prefix = "python3-{name}"
+tools = ["python3", "python3-pip", "python3-venv"]
+runtime_deps = ["build-essential"]
+overrides = { cv2 = "python3-opencv", PIL = "python3-pil", yaml = "python3-yaml", bs4 = "python3-bs4", cryptography = "python3-cryptography", git = "python3-git", cairo = "python3-cairo", magic = "python3-magic", numpy = "python3-numpy" }
+
+[ecosystems.node]
+enabled = true
+tools = ["nodejs", "npm"]
+runtime_deps = ["build-essential", "python3"]
+
+[ecosystems.c]
+enabled = true
+tools = ["gcc", "make", "pkg-config"]
+header_map = { "openssl" = "libssl-dev", "curl" = "libcurl4-openssl-dev", "zlib" = "zlib1g-dev", "sqlite3" = "libsqlite3-dev", "postgresql" = "libpq-dev", "readline" = "libreadline-dev", "alsa" = "libasound2-dev", "pulse" = "libpulse-dev", "gtk" = "libgtk-3-dev", "gtk4" = "libgtk-4-dev", "SDL2" = "libsdl2-dev", "boost" = "libboost-all-dev", "ffmpeg" = "libffmpeg-dev", "libav" = "libavcodec-dev", "uv" = "libuv1-dev", "jpeg" = "libjpeg-dev", "png" = "libpng-dev", "zstd" = "libzstd-dev", "lzma" = "liblzma-dev", "bz2" = "libbz2-dev", "event" = "libevent-dev", "xml2" = "libxml2-dev", "xslt" = "libxslt1-dev" }
+
+[ecosystems.shell]
+enabled = true
+overrides = { ffmpeg = "ffmpeg", jq = "jq", yq = "yq", docker = "docker.io", inotifywait = "inotify-tools", convert = "imagemagick", identify = "imagemagick", xclip = "xclip", wl-copy = "wl-clipboard", playerctl = "playerctl", pactl = "pulseaudio-utils", bluetoothctl = "bluez" }
+
+[ecosystems.go]
+enabled = true
+tools = ["golang"]
+runtime_deps = ["gcc"]
+
+[ecosystems.java]
+enabled = true
+tools = ["default-jdk"]
+
+[ecosystems.ruby]
+enabled = true
+tools = ["ruby"]
+runtime_deps = ["build-essential", "ruby-dev"]

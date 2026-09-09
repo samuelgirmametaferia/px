@@ -1,0 +1,4 @@
+openssl-devel-3.2.2-1.fc40.x86_64 : Files for development of applications which will use OpenSSL
+Repo        : fedora
+Matched from:
+Filename    : /usr/include/openssl/ssl.h

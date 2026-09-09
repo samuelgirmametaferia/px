@@ -1,0 +1,3 @@
+flask==3.0.0
+# a comment
+pyyaml>=6.0

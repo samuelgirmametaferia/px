@@ -1,0 +1,6 @@
+Name        : vim-enhanced
+Version     : 9.1.600
+Release     : 1.fc40
+Summary     : The latest version of the VIM editor
+Description : VIM (VIsual editor iMproved) is an updated and improved
+            : version of the vi editor.

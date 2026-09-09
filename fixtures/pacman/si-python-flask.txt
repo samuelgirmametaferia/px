@@ -1,0 +1,21 @@
+Repository      : extra
+Name            : python-flask
+Version         : 3.1.3-1
+Description     : Micro webdevelopment framework for Python
+Architecture    : any
+URL             : https://flask.palletsprojects.com/
+Licenses        : BSD-3-Clause
+Groups          : None
+Provides        : None
+Depends On      : python  python-blinker  python-click  python-itsdangerous  python-jinja  python-markupsafe  python-werkzeug
+Optional Deps   : python-asgiref: async functions and views
+                  python-cryptography: using ad-hoc certificates
+                  python-dotenv: loading env vars from files
+Conflicts With  : None
+Replaces        : None
+Download Size   : 182.11 KiB
+Installed Size  : 1160.78 KiB
+Packager        : Carl Smedstad <carsme@archlinux.org>
+Build Date      : None
+Validated By    : SHA-256 Sum  Signature
+
