@@ -350,3 +350,20 @@ fn stale_root_triggers_refresh_not_failure() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The registry URL is a DEDICATED tag (releases/download/registry-latest),
+/// NOT releases/latest — a product release (like px v3) must never steal
+/// the registry pointer. This pins the default config against regressions.
+#[test]
+fn registry_default_url_uses_dedicated_tag() {
+    let cfg = px::config::Config::default();
+    assert!(
+        cfg.upstream_registry.contains("/download/registry-latest"),
+        "registry URL must be the dedicated tag, got: {}",
+        cfg.upstream_registry
+    );
+    assert!(
+        !cfg.upstream_registry.contains("/latest/download"),
+        "releases/latest/download is stolen by product releases — must not be used"
+    );
+}

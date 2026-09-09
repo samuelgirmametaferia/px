@@ -36,7 +36,8 @@ impl Default for Config {
             source_enabled: true,
             sandbox: "auto".into(),
             upstream_registry:
-                "https://github.com/samuelgirmametaferia/px/releases/latest/download".into(),
+                "https://github.com/samuelgirmametaferia/px/releases/download/registry-latest"
+                    .into(),
             telemetry_endpoint: String::new(),
             telemetry_token: String::new(),
             cache_search_secs: 3600,
