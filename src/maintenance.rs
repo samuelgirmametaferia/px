@@ -13,7 +13,17 @@ fn expand_no_pkg(def: &CommandDef) -> Vec<String> {
 }
 
 async fn run(exec: &Arc<dyn Executor>, argv: &[String]) -> PxResult<String> {
-    let out = exec.run(argv, RunOpts::default()).await?;
+    // Maintenance queries get a generous but real ceiling — a wedged
+    // package-manager call must fail loudly, not hang px.
+    let out = exec
+        .run(
+            argv,
+            RunOpts {
+                timeout: Some(std::time::Duration::from_secs(60)),
+                ..Default::default()
+            },
+        )
+        .await?;
     Ok(out.stdout)
 }
 

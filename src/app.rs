@@ -36,6 +36,10 @@ impl App {
 
         let client = reqwest::Client::builder()
             .user_agent(concat!("px/", env!("CARGO_PKG_VERSION")))
+            // Network calls (recipe fetch, GitHub/npm APIs, jokes) are small
+            // requests — a stalled connection must time out, not hang px.
+            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .map_err(PxError::Network)?;
 
@@ -181,6 +185,8 @@ impl App {
                 }
             }
             Command::Uninstall { specs } => commands::uninstall::run(self, &specs).await,
+            Command::Upgrade => commands::upgrade::run(self).await,
+            Command::Completions { shell } => commands::completions::run(self, &shell),
             Command::Suggest => commands::suggest::run(self).await,
             Command::Status => commands::status::run(self).await,
             Command::Search { term } => commands::search::run(self, &term.join(" ")).await,

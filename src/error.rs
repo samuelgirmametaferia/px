@@ -26,6 +26,9 @@ pub enum PxError {
 
     #[error("not found: {0}")]
     NotFound(String),
+
+    #[error("{0}")]
+    Timeout(String),
 }
 
 pub type PxResult<T> = Result<T, PxError>;

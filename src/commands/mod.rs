@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod completions;
 pub mod doctor;
 pub mod info;
 pub mod install;
@@ -10,3 +11,4 @@ pub mod status;
 pub mod suggest;
 pub mod tutorial;
 pub mod uninstall;
+pub mod upgrade;

@@ -308,6 +308,7 @@ pub fn zypper_provides(text: &str, source: &str) -> Vec<PackageHit> {
 pub fn parse_output(name: &str, text: &str, source: &str) -> Vec<PackageHit> {
     match name {
         "pacman_search" | "helper_search" => pacman_search(text, source),
+        "pacman_ssearch" => pacman_ssearch(text, source),
         "pacman_info" | "helper_info" => pacman_info(text, source),
         "pacman_files" => pacman_files(text, source),
         "apt_search" => apt_search(text, source),
@@ -330,6 +331,7 @@ pub fn parse_output(name: &str, text: &str, source: &str) -> Vec<PackageHit> {
 /// All parser names a recipe may reference.
 pub const KNOWN_PARSERS: &[&str] = &[
     "pacman_search",
+    "pacman_ssearch",
     "pacman_info",
     "pacman_files",
     "helper_search",
@@ -464,4 +466,65 @@ pub fn parse_maintenance_names(parse: &str, text: &str) -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// `pacman -Ss` / `yay -Ss --aur` (pacman ≥7 format — two lines per hit):
+///   repo/name version [installed]
+///       description
+pub fn pacman_ssearch(text: &str, source: &str) -> Vec<PackageHit> {
+    let mut hits = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let t = line.trim();
+        if t.is_empty() || !t.contains('/') || line.starts_with(char::is_whitespace) {
+            continue; // description lines are consumed below
+        }
+        let first = t.split_whitespace().next().unwrap_or("");
+        let Some((_repo, name)) = first.split_once('/') else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let version = t.split_whitespace().nth(1).unwrap_or("").to_string();
+        // the indented line after the header is the description
+        let mut description = None;
+        if let Some(next) = lines.next() {
+            if next.starts_with(' ') && !next.trim().is_empty() {
+                description = Some(next.trim().to_string());
+            }
+            // a non-indented next line is the following package's header —
+            // process it on the next loop turn instead of dropping it.
+            else {
+                push_header(next, source, &mut hits);
+            }
+        }
+        hits.push(PackageHit {
+            name: name.to_string(),
+            version,
+            description,
+            source: source.to_string(),
+            score: 0,
+        });
+    }
+    hits
+}
+
+/// Parse one header line ("repo/name version [installed]") into a hit.
+fn push_header(line: &str, source: &str, hits: &mut Vec<PackageHit>) {
+    let t = line.trim();
+    let first = t.split_whitespace().next().unwrap_or("");
+    let Some((_repo, name)) = first.split_once('/') else {
+        return;
+    };
+    if name.is_empty() {
+        return;
+    }
+    hits.push(PackageHit {
+        name: name.to_string(),
+        version: t.split_whitespace().nth(1).unwrap_or("").to_string(),
+        description: None,
+        source: source.to_string(),
+        score: 0,
+    });
 }

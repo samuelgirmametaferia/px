@@ -142,3 +142,7 @@ label = "Deno"
 method = "script"
 url = "https://deno.land/install.sh"
 require_any = ["curl"]
+
+[maintenance.upgrade]
+argv = ["sudo", "dnf", "upgrade", "-y"]
+elevated = true

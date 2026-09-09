@@ -190,6 +190,12 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         return Err(PxError::Cancelled);
     }
 
+    // Ask for sudo NOW, before any spinner or bar starts drawing — the
+    // password prompt must never race live output for the terminal.
+    if !app.cli.dry_run {
+        crate::backend::elevate::preflight().await?;
+    }
+
     // One joke per install. Non-negotiable.
     println!(
         "{} {}",

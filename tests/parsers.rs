@@ -21,6 +21,23 @@ fn pacman_search_names_only() {
 }
 
 #[test]
+fn pacman_ssearch_two_line_format() {
+    let hits = p::pacman_ssearch(&fixture("pacman/ss-neovim.txt"), "repo");
+    assert!(!hits.is_empty(), "pacman -Ss output must parse");
+    let nvim = hits.iter().find(|h| h.name == "neovim").unwrap();
+    assert!(!nvim.version.is_empty());
+    assert!(
+        nvim.description
+            .as_deref()
+            .is_some_and(|d| d.contains("Vim")),
+        "description must be captured: {:?}",
+        nvim.description
+    );
+    // every hit came from a repo/name header
+    assert!(hits.iter().all(|h| !h.name.is_empty()));
+}
+
+#[test]
 fn pacman_info_block() {
     let hits = p::pacman_info(&fixture("pacman/si-python-flask.txt"), "repo");
     assert!(!hits.is_empty(), "pacman -Si output must parse");

@@ -85,6 +85,12 @@ pub enum Command {
     /// Uninstall packages through your distro's own tools.
     Uninstall { specs: Vec<String> },
 
+    /// Upgrade every package on the system (pacman -Syu / apt upgrade / ...).
+    Upgrade,
+
+    /// Generate shell completions (bash, zsh, fish, ...).
+    Completions { shell: String },
+
     /// Find unused/unneeded packages and offer to remove them (free space).
     Suggest,
 

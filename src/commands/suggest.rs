@@ -123,11 +123,15 @@ pub async fn run(app: App) -> PxResult<()> {
         .take(20)
         .map(|p| format!("{:<32} {}", p.name, crate::maintenance::human_size(p.size)))
         .collect();
+    // The multiselect owns the terminal — suspend live drawing around it.
+    crate::ui::spinner::suspend_all();
     let picks = dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
         .with_prompt("select packages to uninstall (space = toggle)")
         .items(&items)
         .interact_on(&dialoguer::console::Term::stderr())
-        .map_err(|_| PxError::Cancelled)?;
+        .map_err(|_| PxError::Cancelled);
+    crate::ui::spinner::resume_all();
+    let picks = picks?;
     if picks.is_empty() {
         println!("  {} nothing selected", style.dim("ok"));
         return Ok(());
@@ -152,6 +156,12 @@ pub async fn run(app: App) -> PxResult<()> {
         if !crate::ui::prompt::confirm("proceed?", false)? {
             return Err(PxError::Cancelled);
         }
+    }
+
+    // sudo before the spinner starts — a password prompt behind a live
+    // spinner is invisible and looks exactly like a hang.
+    if !app.cli.dry_run {
+        crate::backend::elevate::preflight().await?;
     }
 
     let pb = crate::ui::spinner::one(&format!("removing {}…", chosen.join(", ")));

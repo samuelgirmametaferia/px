@@ -7,6 +7,10 @@ use crate::error::{PxError, PxResult};
 /// Check that elevation is available without blocking later.
 /// - interactive tty: `sudo -v` (prompts once, caches credentials)
 /// - non-tty: `sudo -n true` (must be passwordless or already cached)
+///
+/// ALL live drawing is suspended first and the user is told a password may
+/// be asked: a sudo prompt drawn behind a spinner is invisible, and an
+/// invisible prompt is indistinguishable from a hang.
 pub async fn preflight() -> PxResult<()> {
     if !nix_like() {
         return Ok(());
@@ -19,6 +23,17 @@ pub async fn preflight() -> PxResult<()> {
         ));
     }
 
+    // Fast path: credentials already cached / passwordless — no prompt.
+    let cached = tokio::process::Command::new(&sudo)
+        .args(["-n", "true"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    if cached.map(|s| s.success()).unwrap_or(false) {
+        return Ok(());
+    }
+
     let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut argv: Vec<String> = vec![sudo];
     if interactive {
@@ -28,11 +43,19 @@ pub async fn preflight() -> PxResult<()> {
         argv.push("true".into());
     }
 
+    crate::ui::prompt::flush();
+    crate::ui::spinner::suspend_all();
+    if interactive {
+        eprintln!("px needs sudo — you may be asked for your password");
+    }
     let out = tokio::process::Command::new(&argv[0])
         .args(&argv[1..])
+        .kill_on_drop(true)
         .status()
         .await
-        .map_err(|e| PxError::User(format!("cannot run sudo: {e}")))?;
+        .map_err(|e| PxError::User(format!("cannot run sudo: {e}")));
+    crate::ui::spinner::resume_all();
+    let out = out?;
 
     if out.success() {
         Ok(())

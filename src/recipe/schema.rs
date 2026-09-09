@@ -81,6 +81,8 @@ pub struct Maintenance {
     pub installed_info: Option<CommandDef>,
     /// Explicitly user-installed packages (e.g. `pacman -Qe`).
     pub explicit: Option<CommandDef>,
+    /// Full system upgrade (`pacman -Syu`, `apt upgrade`, ...).
+    pub upgrade: Option<CommandDef>,
 }
 
 /// A well-known application that installs through its own channel rather

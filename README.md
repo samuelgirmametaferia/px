@@ -97,6 +97,8 @@ distros.
 | `px install for <path>` | project analysis (`--local` / `--global`) |
 | `px -i` / `px -i -> <path>` / `px -i for <path>` | interactive forms |
 | `px uninstall <pkgs...>` | remove packages through your distro's tools |
+| `px upgrade` | full system upgrade (`pacman -Syu` / `apt upgrade` / ...) |
+| `px completions <shell>` | bash / zsh / fish / elvish / powershell |
 | `px suggest` | find unused packages + space hogs, offer to free them |
 | `px status` | running px instance, interrupted installs, caches |
 | `px search <term>` | search every source, fuzzy-ranked table |
@@ -131,6 +133,13 @@ Global flags: `-y/--yes`, `--dry-run`, `--local/--global`, `--no-source`,
 - **Self-cleaning caches**, a **first-run spectrum animation**, **jokes
   during installs** (fresh from the internet, cached offline), and
   **five progress bar styles** (`--bar blocks|shades|rainbow|minimal|sparkles`).
+- **Hang-proof by construction.** Every query (search, info, installed
+  checks, recipe fetch, GitHub/npm APIs) has a hard timeout; children die
+  with px (`kill_on_drop`); the sudo password is always asked *before* any
+  spinner starts drawing, and every interactive prompt suspends live
+  drawing — a prompt hidden behind a spinner is what hangs look like, so
+  that can never happen. Spinners show elapsed time so long operations
+  never look frozen.
 
 ## Safety rules
 

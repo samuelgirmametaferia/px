@@ -24,6 +24,10 @@ pub struct RunOpts {
     /// When true, print the exact argv instead of running it. Used for
     /// mutating commands under --dry-run; searches always run for real.
     pub dry_run: bool,
+    /// Hard ceiling for this command. Queries get one; installs never do
+    /// (a build can legitimately take minutes). On timeout the child is
+    /// killed and px reports instead of hanging forever.
+    pub timeout: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -134,6 +138,9 @@ impl Executor for RealExecutor {
 
         let mut cmd = Command::new(&resolved[0]);
         cmd.args(&resolved[1..]);
+        // Never leak children: if px (or the future wrapping it) goes away,
+        // the child dies with it instead of lingering.
+        cmd.kill_on_drop(true);
         if let Some(cwd) = &opts.cwd {
             cmd.current_dir(cwd);
         }
@@ -159,7 +166,23 @@ impl Executor for RealExecutor {
                 stderr: String::new(),
             })
         } else {
-            let out = cmd.output().await.map_err(|e| PxError::Command {
+            let fut = cmd.output();
+            let out = match opts.timeout {
+                None => fut.await,
+                Some(limit) => match tokio::time::timeout(limit, fut).await {
+                    Ok(res) => res,
+                    Err(_elapsed) => {
+                        // child is killed by kill_on_drop when the future is
+                        // dropped here
+                        return Err(PxError::Timeout(format!(
+                            "{} timed out after {}s",
+                            resolved.join(" "),
+                            limit.as_secs()
+                        )));
+                    }
+                },
+            }
+            .map_err(|e| PxError::Command {
                 cmd: resolved.join(" "),
                 stderr: e.to_string(),
             })?;

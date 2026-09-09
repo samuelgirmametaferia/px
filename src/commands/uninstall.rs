@@ -83,6 +83,11 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         return Err(PxError::Cancelled);
     }
 
+    // sudo before the spinner starts, so the prompt is never hidden.
+    if !app.cli.dry_run && app.recipe().maintenance.uninstall.is_some() {
+        crate::backend::elevate::preflight().await?;
+    }
+
     let pb = crate::ui::spinner::one(&format!("removing {}…", to_remove.join(", ")));
     match crate::maintenance::uninstall(
         &app.exec,

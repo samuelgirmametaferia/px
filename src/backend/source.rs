@@ -29,10 +29,20 @@ impl SourceProvider {
         }
     }
 
-    /// Expand + run one recipe command, returning stdout.
+    /// Expand + run one recipe command, returning stdout. Queries get a hard
+    /// timeout — a wedged package manager must never hang px.
     async fn run(&self, cmd: &CommandDef, pkg: &str) -> PxResult<String> {
         let argv = expand_argv(&cmd.argv, pkg, &[pkg.to_string()], self.helper(), None);
-        let out = self.exec.run(&argv, RunOpts::default()).await?;
+        let out = self
+            .exec
+            .run(
+                &argv,
+                RunOpts {
+                    timeout: Some(std::time::Duration::from_secs(20)),
+                    ..Default::default()
+                },
+            )
+            .await?;
         Ok(out.stdout)
     }
 

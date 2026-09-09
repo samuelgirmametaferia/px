@@ -26,8 +26,8 @@ label = "official repos"
 require_any = ["pacman"]
 
 [sources.search]
-argv = ["pacman", "-Ssq", "{pkg}"]
-parse = "pacman_search"
+argv = ["pacman", "-Ss", "{pkg}"]
+parse = "pacman_ssearch"
 
 [sources.info]
 argv = ["pacman", "-Si", "{pkg}"]
@@ -51,8 +51,8 @@ label = "AUR"
 require_any = ["paru", "yay"]
 
 [sources.search]
-argv = ["{helper}", "-Ssq", "--aur", "{pkg}"]
-parse = "helper_search"
+argv = ["{helper}", "-Ss", "--aur", "{pkg}"]
+parse = "pacman_ssearch"
 
 [sources.info]
 argv = ["{helper}", "-Sia", "{pkg}"]
@@ -154,3 +154,7 @@ label = "Deno"
 method = "script"
 url = "https://deno.land/install.sh"
 require_any = ["curl"]
+
+[maintenance.upgrade]
+argv = ["sudo", "pacman", "-Syu", "--noconfirm"]
+elevated = true

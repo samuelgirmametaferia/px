@@ -146,3 +146,59 @@ fn multi_pkg_placeholder_expands_every_arg() {
     assert_eq!(argv[5], "b");
     assert_eq!(argv[6], "c");
 }
+
+#[test]
+fn upgrade_generates_per_distro_argv() {
+    fn expect(text: &str) -> Vec<String> {
+        let recipe = Recipe::parse_str(text).unwrap();
+        let def = recipe.maintenance.upgrade.expect("upgrade command");
+        expand_argv(&def.argv, "", &[], None, None)
+    }
+    assert_eq!(
+        expect(px::recipe::load::bundled::ARCH),
+        vec![
+            "sudo".to_string(),
+            "pacman".to_string(),
+            "-Syu".to_string(),
+            "--noconfirm".to_string(),
+        ]
+    );
+    assert_eq!(
+        expect(px::recipe::load::bundled::DEBIAN),
+        vec![
+            "sudo".to_string(),
+            "apt-get".to_string(),
+            "upgrade".to_string(),
+            "-y".to_string(),
+        ]
+    );
+    assert_eq!(
+        expect(px::recipe::load::bundled::FEDORA),
+        vec![
+            "sudo".to_string(),
+            "dnf".to_string(),
+            "upgrade".to_string(),
+            "-y".to_string(),
+        ]
+    );
+    assert_eq!(
+        expect(px::recipe::load::bundled::OPENSUSE),
+        vec![
+            "sudo".to_string(),
+            "zypper".to_string(),
+            "--non-interactive".to_string(),
+            "update".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn all_recipes_declare_upgrade() {
+    for (id, text) in px::recipe::load::bundled::all() {
+        let recipe = Recipe::parse_str(text).unwrap();
+        assert!(
+            recipe.maintenance.upgrade.is_some(),
+            "{id} needs an upgrade command"
+        );
+    }
+}
