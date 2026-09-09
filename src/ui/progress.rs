@@ -55,17 +55,19 @@ pub fn bytes_bar(style: BarStyle, total_bytes: u64, label: &str) -> ProgressBar 
     let pb = ProgressBar::new(total_bytes.max(1));
     let template = match style {
         BarStyle::Blocks => {
-            "{spinner:.green} {msg}\n{wide_bar:.cyan/blue} {bytes}/{total_bytes} ({percent}%) ↓{bytes_per_sec}"
+            "{spinner:.green} {msg}\n{wide_bar:.cyan/blue} {bytes}/{total_bytes} ({percent}%) ↓{bytes_per_sec} eta {eta}"
         }
         BarStyle::Shades => {
-            "{spinner:.green} {msg}\n{wide_bar:.magenta/white} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} [{elapsed_precise}]"
+            "{spinner:.green} {msg}\n{wide_bar:.magenta/white} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} eta {eta} [{elapsed_precise}]"
         }
         BarStyle::Rainbow => {
-            "{spinner:.green} {msg}\n{wide_bar:.yellow/green} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} ✨"
+            "{spinner:.green} {msg}\n{wide_bar:.yellow/green} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} eta {eta} ✨"
         }
-        BarStyle::Minimal => "{msg} [{wide_bar:.white/dim}] {bytes}/{total_bytes} ↓{bytes_per_sec}",
+        BarStyle::Minimal => {
+            "{msg} [{wide_bar:.white/dim}] {bytes}/{total_bytes} ↓{bytes_per_sec} eta {eta}"
+        }
         BarStyle::Sparkles => {
-            "{spinner:.magenta} {msg}\n{wide_bar:.yellow/cyan} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} 🚀"
+            "{spinner:.magenta} {msg}\n{wide_bar:.yellow/cyan} {bytes}/{total_bytes} {percent}% ↓{bytes_per_sec} eta {eta} 🚀"
         }
     };
     pb.set_style(

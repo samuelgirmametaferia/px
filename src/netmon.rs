@@ -52,9 +52,15 @@ pub fn spawn_monitor(
     tokio::spawn(async move {
         let mut last = baseline_rx;
         let mut seen: u64 = 0;
+        let mut samples: u32 = 0;
         let total = total_bytes.unwrap_or(u64::MAX);
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
+            samples += 1;
+            // long installs deserve fresh jokes: rotate every ~15s
+            if samples % 50 == 0 {
+                bar.set_message(crate::ui::jokes::next());
+            }
             let Some(now) = total_rx_bytes() else {
                 continue;
             };

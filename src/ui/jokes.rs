@@ -24,6 +24,28 @@ const BUNDLED: &[&str] = &[
 static JOKES: OnceLock<Vec<String>> = OnceLock::new();
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
+/// The rotation index persists on disk — px is a fresh process every run,
+/// and an in-memory counter resets to the SAME first joke every single
+/// time (the "why do programmers prefer dark mode?" forever bug).
+fn rotation_file() -> std::path::PathBuf {
+    crate::cache::cache_root().join("joke-index")
+}
+
+fn load_rotation() -> usize {
+    std::fs::read_to_string(rotation_file())
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn store_rotation(i: usize) {
+    let f = rotation_file();
+    if let Some(parent) = f.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(f, i.to_string());
+}
+
 /// Load jokes: disk cache of fetched ones + bundled fallbacks.
 pub fn init(client: &reqwest::Client) {
     let mut jokes: Vec<String> = BUNDLED.iter().map(|s| s.to_string()).collect();
@@ -77,10 +99,22 @@ pub fn init(client: &reqwest::Client) {
     let _ = JOKES.set(jokes);
 }
 
-/// Cycle to the next joke (round-robin).
+/// Cycle to the next joke — round-robin ACROSS RUNS (disk-persisted
+/// index) and within a run.
 pub fn next() -> String {
     let jokes = JOKES.get_or_init(|| BUNDLED.iter().map(|s| s.to_string()).collect());
-    let i = NEXT.fetch_add(1, Ordering::Relaxed) % jokes.len();
+    // in-process calls advance the atomic; the first call of each process
+    // seeds it from the persisted index so runs continue the rotation
+    let i = if NEXT.load(Ordering::Relaxed) == 0 {
+        let start = load_rotation();
+        NEXT.store(start + 1, Ordering::Relaxed);
+        store_rotation(start + 1);
+        start % jokes.len()
+    } else {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        store_rotation(n + 1);
+        n % jokes.len()
+    };
     jokes[i].clone()
 }
 
