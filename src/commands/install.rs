@@ -291,7 +291,8 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     // `credited` is shared with the monitor so the summary can report the
     // real downloaded total.
     let credited = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let monitor = crate::netmon::total_rx_bytes().map(|baseline| {
+    let netmon_baseline = crate::netmon::total_rx_bytes();
+    let monitor = netmon_baseline.map(|baseline| {
         crate::netmon::spawn_monitor(
             bar.clone(),
             if total_bytes > 0 {
@@ -342,6 +343,18 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     }
     if let Some(monitor) = monitor {
         monitor.abort();
+    }
+    // Final credit from the FULL baseline delta — a fast download can
+    // complete before the monitor's first 300ms sample, and a finished
+    // install must still report its bytes (CI runners download in ~0.2s).
+    if total_bytes > 0
+        && let Some((baseline, now)) = netmon_baseline.zip(crate::netmon::total_rx_bytes())
+    {
+        let full = (now - baseline).min(total_bytes);
+        let prev = credited.load(std::sync::atomic::Ordering::Relaxed);
+        if full > prev {
+            credited.store(full, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     bar.finish_and_clear();
     if !app.cli.dry_run {
