@@ -1,0 +1,726 @@
+//! Universal project identity resolution.
+//!
+//! The rule this module enforces: **a matching name in a registry proves
+//! nothing about project identity**. npm's `agent-code` (no repo, no
+//! versions) is not avala-ai's `agent-code` (48 crate releases). Resolution
+//! therefore establishes a canonical PROJECT first — curated registry →
+//! crates.io repository link → GitHub search → README evidence — and only
+//! then offers install methods, each carrying a confidence score. Same-name
+//! packages with no identity link top out at LOW confidence and are never
+//! installed silently.
+
+pub mod exec;
+pub mod readme;
+pub mod registry;
+pub mod releasebin;
+
+use serde::Deserialize;
+
+use crate::app::App;
+use crate::error::{PxError, PxResult};
+
+/// A canonical project identity.
+#[derive(Debug, Clone)]
+pub struct Project {
+    /// "avala-ai/agent-code" (github) — the identity anchor.
+    pub canonical: String,
+    pub description: Option<String>,
+    /// Executable the project installs, when known (package ≠ binary!).
+    pub binary: Option<String>,
+    /// How the identity was established.
+    pub evidence: String,
+}
+
+/// Every way a project can be installed, with a confidence score.
+/// Confidence (per the spec):
+///   100 officially documented (curated registry entry)
+///    90 README installation section references it
+///    80 official release with a checksum we can verify
+///    60 installer exists but is poorly documented
+///    20 same-name package with NO identity link — never silent
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    pub method: Method,
+    pub confidence: u32,
+    pub note: String,
+    /// Registry-pinned installer sha256: when set, the live installer must
+    /// hash to exactly this or the install STOPS.
+    pub pinned_sha: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Method {
+    /// Distro-native package (repo/aur/...) — handled before universal.
+    Native,
+    /// Verified upstream release binary: download, checksum, unpack.
+    Release { repo: String },
+    /// cargo install <crate> (build scripts run — sandboxed).
+    Cargo { crate_name: String },
+    /// npm install -g <pkg> — only with a verified repository link.
+    Npm { package: String },
+    /// pipx install <pkg>
+    Pipx { package: String },
+    /// go install <module>@latest
+    Go { module: String },
+    /// gem install <gem>
+    Gem { gem: String },
+    /// brew install <tap> (brew only exists on macOS/Linuxbrew boxes)
+    Brew { tap: String },
+    /// upstream installer script — static-scanned + sandboxed, last resort
+    Script { url: String },
+    /// source build from the repo
+    Source { repo: String },
+}
+
+impl Method {
+    /// Rank for install preference (1 = best). Native > release binary >
+    /// language package managers > brew > script > source.
+    pub fn rank(&self) -> u8 {
+        match self {
+            Method::Native => 1,
+            Method::Release { .. } => 2,
+            Method::Cargo { .. }
+            | Method::Npm { .. }
+            | Method::Pipx { .. }
+            | Method::Go { .. }
+            | Method::Gem { .. } => 3,
+            Method::Brew { .. } => 4,
+            Method::Script { .. } => 5,
+            Method::Source { .. } => 6,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Method::Native => "system package".into(),
+            Method::Release { repo } => format!("release binary ({repo})"),
+            Method::Cargo { crate_name } => format!("cargo install {crate_name}"),
+            Method::Npm { package } => format!("npm install -g {package}"),
+            Method::Pipx { package } => format!("pipx install {package}"),
+            Method::Go { module } => format!("go install {module}@latest"),
+            Method::Gem { gem } => format!("gem install {gem}"),
+            Method::Brew { tap } => format!("brew install {tap}"),
+            Method::Script { url } => format!("installer ({url})"),
+            Method::Source { repo } => format!("source build ({repo})"),
+        }
+    }
+
+    /// Tools this method needs on PATH.
+    pub fn requires(&self) -> Vec<&'static str> {
+        match self {
+            Method::Cargo { .. } => vec!["cargo"],
+            Method::Npm { .. } => vec!["npm"],
+            Method::Pipx { .. } => vec!["pipx"],
+            Method::Go { .. } => vec!["go"],
+            Method::Gem { .. } => vec!["gem"],
+            Method::Brew { .. } => vec!["brew"],
+            Method::Script { .. } => vec!["curl"],
+            Method::Release { .. } => vec![],
+            Method::Source { .. } => vec![],
+            Method::Native => vec![],
+        }
+    }
+}
+
+/// Candidates sorted best-first: rank first, confidence second.
+pub fn rank_candidates(mut candidates: Vec<Candidate>) -> Vec<Candidate> {
+    candidates.retain(|c| {
+        // a method is only a candidate if its tools exist on this machine
+        c.method.requires().iter().all(|t| which::which(t).is_ok())
+    });
+    candidates.sort_by(|a, b| {
+        a.method
+            .rank()
+            .cmp(&b.method.rank())
+            .then(b.confidence.cmp(&a.confidence))
+    });
+    candidates
+}
+
+// ---------------------------------------------------------- identity sources
+
+/// Resolve a spec into a canonical project, with candidates.
+/// Order of strength: curated registry (confidence 100) → crates.io repo →
+/// GitHub search → npm (identity-checked only).
+pub async fn resolve(app: &App, spec: &str) -> PxResult<Option<(Project, Vec<Candidate>)>> {
+    // 1. curated registry — strongest signal, methods pre-scored
+    if let Some(entry) = registry::lookup(spec) {
+        let project = Project {
+            canonical: entry.project.clone(),
+            description: Some(entry.description.clone()),
+            binary: entry.binary.clone(),
+            evidence: "curated registry (officially documented methods)".into(),
+        };
+        let candidates: Vec<Candidate> = entry
+            .methods
+            .iter()
+            .map(|m| Candidate {
+                method: m.to_method(),
+                confidence: m.confidence,
+                note: m.note.clone(),
+                pinned_sha: None,
+            })
+            .collect();
+        return Ok(Some((project, candidates)));
+    }
+
+    // 1b. the upstream fallback registry: deterministic, sharded, pinned
+    //     installer hashes. Consulted BEFORE ad-hoc discovery so verified
+    //     records beat guesses.
+    if let Some(source) = crate::registry::source_from_config(&app.config) {
+        match crate::registry::lookup(&app.client, &source, spec).await {
+            Ok(Some(record)) if !record.is_dead() => {
+                let project = Project {
+                    canonical: record.canonical_id.clone(),
+                    description: Some(record.description.clone()),
+                    binary: record.expected_binaries.first().cloned(),
+                    evidence: format!(
+                        "px upstream registry (confidence {}, {})",
+                        record.identity_confidence, record.security_state
+                    ),
+                };
+                let candidates: Vec<Candidate> = record
+                    .install_methods
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, m)| {
+                        let method = registry_method_to_method(m)?;
+                        Some(Candidate {
+                            method,
+                            confidence: record.identity_confidence,
+                            note: match &m.installer_sha256 {
+                                Some(_) => format!("registry method {i} (installer hash pinned)"),
+                                None => format!("registry method {i}"),
+                            },
+                            pinned_sha: m.installer_sha256.clone(),
+                        })
+                    })
+                    .collect();
+                if !candidates.is_empty() {
+                    return Ok(Some((project, candidates)));
+                }
+            }
+            Ok(Some(dead)) => {
+                // tombstone: the identity exists but is dead — say so and
+                // never let a namesake hijack resolution
+                println!(
+                    "\n  {} {} is recorded in the px registry as {} — refusing",
+                    app.style.warn("⚠"),
+                    app.style.bold(&dead.canonical_id),
+                    app.style.bold(&dead.security_state)
+                );
+                println!(
+                    "    {} a new project taking over this name cannot hijack resolution",
+                    app.style.dim("·")
+                );
+                return Ok(None);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::debug!("registry lookup failed: {e}");
+                // fall through to ad-hoc resolution
+            }
+        }
+    }
+
+    // 2. crates.io: a crate with a repository link establishes identity
+    //    AND a high-confidence cargo method in one shot.
+    if let Some((repo, desc)) = cratesio_identity(&app.client, spec).await {
+        let mut candidates = vec![Candidate {
+            method: Method::Cargo {
+                crate_name: spec.to_string(),
+            },
+            confidence: 90,
+            note: "published on crates.io".into(),
+            pinned_sha: None,
+        }];
+        // README may document more methods (brew tap, installer…)
+        candidates.extend(readme::discover(&app.client, &repo).await);
+        candidates.push(Candidate {
+            method: Method::Source { repo: repo.clone() },
+            confidence: 60,
+            note: "build from the repository".into(),
+            pinned_sha: None,
+        });
+        let project = Project {
+            canonical: repo,
+            description: desc,
+            binary: None, // learned after install / from README
+            evidence: "crates.io crate with a repository link".into(),
+        };
+        return Ok(Some((project, candidates)));
+    }
+
+    // 3. GitHub search: the repo itself is the identity.
+    let hits = crate::github::search(&app.client, spec, 3)
+        .await
+        .unwrap_or_default();
+    if let Some(hit) = hits.first() {
+        let mut candidates = readme::discover(&app.client, &hit.full_name).await;
+        candidates.push(Candidate {
+            method: Method::Release {
+                repo: hit.full_name.clone(),
+            },
+            confidence: 60,
+            note: "latest GitHub release".into(),
+            pinned_sha: None,
+        });
+        candidates.push(Candidate {
+            method: Method::Source {
+                repo: hit.full_name.clone(),
+            },
+            confidence: 60,
+            note: "build from the repository".into(),
+            pinned_sha: None,
+        });
+        let project = Project {
+            canonical: hit.full_name.clone(),
+            description: hit.description.clone(),
+            binary: None,
+            evidence: "GitHub repository search".into(),
+        };
+        return Ok(Some((project, candidates)));
+    }
+
+    // 4. npm — ONLY with identity evidence. A bare name match on npm is
+    //    confidence 20 and requires an explicit "this may be unrelated
+    //    software" confirmation. This is the agent-code fix.
+    if let Some((npm_repo, desc)) = npm_identity(&app.client, spec).await {
+        let canonical = match &npm_repo {
+            Some(r) => r.clone(),
+            None => format!("npm:{spec}"),
+        };
+        let (confidence, note) = if npm_repo.is_some() {
+            (
+                90,
+                "npm package with a matching repository link".to_string(),
+            )
+        } else {
+            (
+                20,
+                "npm package exists but has NO repository link — identity unverified, ".to_string()
+                    + "it may be unrelated software squatting the name",
+            )
+        };
+        let project = Project {
+            canonical,
+            description: desc,
+            binary: None,
+            evidence: if npm_repo.is_some() {
+                "npm registry".into()
+            } else {
+                "npm registry (unverified identity)".into()
+            },
+        };
+        return Ok(Some((
+            project,
+            vec![Candidate {
+                method: Method::Npm {
+                    package: spec.to_string(),
+                },
+                confidence,
+                note,
+                pinned_sha: None,
+            }],
+        )));
+    }
+
+    Ok(None)
+}
+
+/// Convert a registry install method into a resolver Method.
+fn registry_method_to_method(m: &crate::registry::schema::RegistryMethod) -> Option<Method> {
+    Some(match m.method.as_str() {
+        "script" => Method::Script {
+            url: m.url.clone()?,
+        },
+        "release" => Method::Release {
+            repo: m
+                .release_url
+                .as_deref()?
+                .trim_start_matches("https://github.com/")
+                .split("/releases")
+                .next()?
+                .to_string(),
+        },
+        "cargo" => Method::Cargo {
+            crate_name: m.crate_name.clone()?,
+        },
+        "npm" => Method::Npm {
+            package: m.package.clone()?,
+        },
+        "pipx" => Method::Pipx {
+            package: m.package.clone()?,
+        },
+        "go" => Method::Go {
+            module: m.module.clone()?,
+        },
+        "gem" => Method::Gem {
+            gem: m.gem.clone()?,
+        },
+        "brew" => Method::Brew {
+            tap: m.tap.clone()?,
+        },
+        "source" => Method::Source {
+            repo: m
+                .url
+                .as_deref()?
+                .trim_start_matches("https://github.com/")
+                .trim_end_matches(".git")
+                .to_string(),
+        },
+        other => {
+            tracing::warn!("unknown registry method '{other}'");
+            return None;
+        }
+    })
+}
+
+#[derive(Deserialize)]
+struct CratesCrate {
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CratesResponse {
+    #[serde(default, rename = "crate")]
+    krate: Option<CratesCrate>,
+}
+
+/// crates.io lookup: returns (normalized github repo, description) when a
+/// crate exists AND declares a repository.
+async fn cratesio_identity(
+    client: &reqwest::Client,
+    name: &str,
+) -> Option<(String, Option<String>)> {
+    let url = format!("https://crates.io/api/v1/crates/{name}");
+    let resp = client
+        .get(url)
+        .header("User-Agent", "px package manager")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: CratesResponse = resp.json().await.ok()?;
+    let krate = body.krate?;
+    let repo = krate.repository?;
+    let normalized = normalize_repo(&repo)?;
+    Some((normalized, krate.description))
+}
+
+#[derive(Deserialize)]
+struct NpmRepository {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NpmDoc {
+    #[serde(default)]
+    repository: Option<NpmRepository>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// npm lookup: returns (Some(repo) when identity is verifiable via a
+/// repository link, None when it is a bare name match).
+async fn npm_identity(
+    client: &reqwest::Client,
+    name: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let url = format!("https://registry.npmjs.org/{}", name.replace('/', "%2f"));
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let doc: NpmDoc = resp.json().await.ok()?;
+    let repo = doc
+        .repository
+        .and_then(|r| r.url)
+        .and_then(|u| normalize_repo(&u));
+    Some((repo, doc.description))
+}
+
+/// Normalize any repository URL form to "owner/repo".
+/// Handles https://github.com/o/r, git+ssh://git@github.com:o/r.git, etc.
+pub fn normalize_repo(url: &str) -> Option<String> {
+    let url = url
+        .trim()
+        .trim_start_matches("git+")
+        .replace("git@github.com:", "https://github.com/");
+    let path = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let path = path.trim_end_matches(".git");
+    let mut parts = path.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+/// The full universal install flow for one spec. Returns true when handled.
+pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
+    let style = &app.style;
+    let Some((project, candidates)) = resolve(app, spec).await? else {
+        return Ok(false);
+    };
+    let candidates = rank_candidates(candidates);
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+
+    println!(
+        "\n  {} resolved {} → {}",
+        style.ok("✓"),
+        style.bold(spec),
+        style.bold(&project.canonical)
+    );
+    if let Some(d) = &project.description {
+        println!("    {} {}", style.dim("·"), style.dim(d));
+    }
+    println!(
+        "    {} {}",
+        style.dim("identity:"),
+        style.dim(&project.evidence)
+    );
+
+    // Show every method with its confidence — the user sees the ranking.
+    println!("\n    {} installation methods:", style.header("›"));
+    for (i, c) in candidates.iter().enumerate() {
+        println!(
+            "    {} {} {} {}",
+            style.dim(&format!("{}.", i + 1)),
+            style.bold(&c.method.label()),
+            style.dim(&format!("[confidence {}]", c.confidence)),
+            style.dim(&c.note)
+        );
+    }
+
+    if app.cli.dry_run {
+        println!(
+            "\n    {} would install via {}",
+            style.dim("[dry-run]"),
+            candidates[0].method.label()
+        );
+        return Ok(true);
+    }
+
+    // Low-confidence candidates are NEVER silent: explicit scary confirm.
+    let pick = if candidates.len() == 1 {
+        0
+    } else if crate::ui::interactive() && !app.cli.yes {
+        let items: Vec<String> = candidates
+            .iter()
+            .map(|c| {
+                format!(
+                    "{:<40} [{}/{}]",
+                    c.method.label(),
+                    c.method.rank(),
+                    c.confidence
+                )
+            })
+            .collect();
+        crate::ui::prompt::select("install using", &items)?
+    } else {
+        0
+    };
+    let chosen = candidates[pick].clone();
+
+    if chosen.confidence < 50 {
+        println!(
+            "\n    {} {}",
+            style.warn("⚠"),
+            style.warn(&format!(
+                "low confidence ({}) — {}",
+                chosen.confidence, chosen.note
+            ))
+        );
+        if crate::ui::interactive()
+            && !crate::ui::prompt::confirm("install anyway? (identity unverified)", false)?
+        {
+            println!("    {} skipped", style.dim("ok"));
+            return Ok(true);
+        }
+        if !crate::ui::interactive() {
+            // never auto-install an unverified identity
+            println!(
+                "    {} refusing to install unverified identity non-interactively",
+                style.err("✘")
+            );
+            return Ok(true);
+        }
+    }
+
+    // Scripts and source builds run the static sandbox scan first.
+    if let Method::Script { url } = &chosen.method {
+        // Registry-pinned installers: the content hash is a contract. If
+        // the live URL serves different bytes, STOP — never silently
+        // execute changed installer content.
+        if let Some(pinned) = chosen_pinned_sha(&chosen) {
+            let bytes = app
+                .client
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            use sha2::{Digest, Sha256};
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            if actual != pinned {
+                println!(
+                    "\n    {} installer content CHANGED since validation",
+                    style.err("✘")
+                );
+                println!("    {} pinned  {pinned}", style.dim("·"));
+                println!("    {} actual  {actual}", style.dim("·"));
+                println!(
+                    "    {} refusing to install — the registry validated different bytes",
+                    style.dim("·")
+                );
+                crate::registry::telemetry::report_failure(
+                    &project.canonical,
+                    &chosen.method.label(),
+                    0,
+                    "hash_mismatch",
+                    None,
+                    url,
+                );
+                return Err(PxError::User(format!(
+                    "installer for {spec} changed since registry validation — refusing"
+                )));
+            }
+            println!(
+                "    {} installer sha256 matches the registry pin",
+                style.ok("✓")
+            );
+        }
+        let scan = crate::security::scan_remote_script(&app.client, url).await?;
+        match scan.verdict {
+            crate::security::Verdict::Dangerous => {
+                println!(
+                    "    {} installer failed the safety scan — refusing",
+                    style.err("✘")
+                );
+                for f in &scan.flags {
+                    println!("      {} {}", style.err("•"), f);
+                }
+                return Err(PxError::User(format!("installer for {spec} is unsafe")));
+            }
+            crate::security::Verdict::Suspicious => {
+                println!("    {} installer has warning signs:", style.warn("⚠"));
+                for f in &scan.flags {
+                    println!("      {} {}", style.warn("•"), f);
+                }
+                if crate::ui::interactive()
+                    && !crate::ui::prompt::confirm("run it in the sandbox anyway?", false)?
+                {
+                    println!("    {} skipped", style.dim("ok"));
+                    return Ok(true);
+                }
+            }
+            crate::security::Verdict::Clean => {
+                println!("    {} safety scan clean", style.ok("✓"));
+            }
+        }
+    }
+
+    println!(
+        "\n    {} installing via {}",
+        style.dim("→"),
+        chosen.method.label()
+    );
+    let method_binary = exec::execute(app, &chosen.method).await?;
+    // the registry knows the real executable name (package ≠ binary);
+    // it beats the method's guess (cargo installs `agent`, not `agent-code`)
+    let binary = project.binary.clone().or(method_binary);
+    println!(
+        "    {} installed via {}",
+        style.ok("✔"),
+        chosen.method.label()
+    );
+
+    // Package name ≠ executable name: verify the binary exists and runs.
+    if let Some(bin) = &binary {
+        match exec::verify_binary(bin).await {
+            Ok(path) => {
+                println!(
+                    "    {} binary: {} ({})",
+                    style.ok("✔"),
+                    style.bold(bin),
+                    style.dim(&path)
+                );
+            }
+            Err(e) => {
+                println!(
+                    "    {} expected binary '{bin}' not runnable: {e}",
+                    style.warn("⚠")
+                );
+            }
+        }
+    }
+
+    // Record the install with full identity for remove/update.
+    if !app.cli.dry_run {
+        let mut ledger = crate::ledger::Ledger::load();
+        ledger.record_universal(spec, &project.canonical, &chosen.method, binary.as_deref());
+        ledger.save();
+    }
+    Ok(true)
+}
+
+/// Run an upstream installer script inside the sandbox with a time limit.
+/// Never the bare `curl | sh` the docs show — px downloads, scans (caller),
+/// then executes with the system read-only and a deadline.
+pub async fn exec_script_sandboxed(app: &App, url: &str) -> PxResult<()> {
+    let curl = crate::exec::resolve_bin("curl");
+    let sh = crate::exec::resolve_bin("sh");
+    let script = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        format!("{curl} -fsSL {url} | {sh}"),
+    ];
+    if crate::sandbox::enabled(app) && crate::sandbox::bwrap_available() {
+        let out = crate::sandbox::run_sandboxed(app, &script, &[]).await?;
+        if out.success() {
+            return Ok(());
+        }
+        // show what failed
+        let combined = format!("{}{}", out.stdout, out.stderr);
+        if !combined.trim().is_empty() {
+            let lines: Vec<&str> = combined.lines().collect();
+            let start = lines.len().saturating_sub(15);
+            eprintln!("  ── last lines of: {url} ──");
+            for line in &lines[start..] {
+                eprintln!("  {line}");
+            }
+        }
+        return Err(PxError::User(format!("installer script failed: {url}")));
+    }
+    // unsandboxed fallback: inherited stdio, kill-on-drop
+    crate::ui::prompt::flush();
+    let status = tokio::process::Command::new(&script[0])
+        .args(&script[1..])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .map_err(|e| PxError::User(format!("cannot run installer: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PxError::User(format!("installer script failed: {url}")))
+    }
+}
+
+/// Pinned installer sha256 for a candidate, when the registry recorded one.
+fn chosen_pinned_sha(c: &Candidate) -> Option<String> {
+    c.pinned_sha.clone()
+}

@@ -1,0 +1,21 @@
+# Reads aggregated failure reports, repairs or quarantines registry records.
+# State machine: ACTIVE -> SUSPECT -> QUARANTINED -> DEAD. Repairs preferred
+# over deletion; dead records keep identity tombstones (anti-hijack).
+name: registry-repair
+on:
+  schedule:
+    - cron: "43 3 * * *"   # daily
+  workflow_dispatch: {}
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull aggregated failure reports
+        run: |
+          curl -sf "$REPORTS_ENDPOINT/v1/failures?since=48h" \
+            -H "Authorization: Bearer $REPORTS_TOKEN" -o failures.json
+      - name: Independently verify each reported URL
+        run: ./scripts/registry-repair.sh failures.json
+      # hash mismatches are escalated immediately, never auto-resolved

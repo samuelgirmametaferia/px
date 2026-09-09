@@ -1,0 +1,90 @@
+# px universal app registry — recipe-agnostic.
+# A curated [[app]] entry is the STRONGEST identity signal px has: it pins
+# the canonical project, its executable name, and its officially documented
+# install methods with confidence scores. Anything not in here goes through
+# identity resolution (crates.io/npm repository cross-check, GitHub search,
+# README parsing) and can never reach confidence 100.
+
+[[app]]
+query = ["agent-code", "avala", "avala-agent"]
+project = "avala-ai/agent-code"
+description = "AI-powered coding agent for the terminal, written in pure Rust"
+binary = "agent"
+
+[[app.methods]]
+method = "cargo"
+crate = "agent-code"
+confidence = 90
+note = "documented in upstream README"
+
+[[app.methods]]
+method = "brew"
+tap = "avala-ai/tap/agent-code"
+confidence = 90
+note = "documented in upstream README"
+
+[[app.methods]]
+method = "script"
+url = "https://raw.githubusercontent.com/avala-ai/agent-code/main/install.sh"
+confidence = 70
+note = "upstream installer script"
+
+[[app]]
+query = ["claude-code", "claude", "claudecode"]
+project = "anthropics/claude-code"
+description = "Claude Code — Anthropic's agentic coding tool"
+binary = "claude"
+
+[[app.methods]]
+method = "npm"
+package = "@anthropic-ai/claude-code"
+confidence = 100
+note = "the officially documented install method"
+
+[[app]]
+query = ["codex", "openai-codex"]
+project = "openai/codex"
+description = "OpenAI Codex CLI — coding agent"
+binary = "codex"
+
+[[app.methods]]
+method = "npm"
+package = "@openai/codex"
+confidence = 100
+note = "the officially documented install method"
+
+[[app]]
+query = ["bun", "bunjs"]
+project = "oven-sh/bun"
+description = "Bun — fast all-in-one JavaScript runtime"
+binary = "bun"
+
+[[app.methods]]
+method = "script"
+url = "https://bun.sh/install"
+confidence = 90
+note = "documented in upstream README"
+
+[[app]]
+query = ["deno"]
+project = "denoland/deno"
+description = "Deno — modern runtime for JavaScript and TypeScript"
+binary = "deno"
+
+[[app.methods]]
+method = "script"
+url = "https://deno.land/install.sh"
+confidence = 90
+note = "documented in upstream README"
+
+[[app]]
+query = ["ripgrep", "rg"]
+project = "BurntSushi/ripgrep"
+description = "ripgrep — recursively search directories with regex"
+binary = "rg"
+
+[[app.methods]]
+method = "cargo"
+crate = "ripgrep"
+confidence = 90
+note = "documented in upstream README"

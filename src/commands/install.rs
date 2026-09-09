@@ -81,9 +81,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 spinner::finish_warn(&pb, format!("{spec} → {} candidates", candidates.len()));
                 // A curated app match ("codex" = the OpenAI CLI) beats fuzzy
                 // package candidates (AUR's codex-app-electron-port-bin).
-                if crate::apps::registry_lookup(&app, &spec).is_some() {
-                    spinner::finish_warn(&pb, format!("{spec} → known app, trying app channel"));
-                    if try_app_install(&app, &spec).await? {
+                if crate::universal::registry::lookup(&spec).is_some() {
+                    spinner::finish_warn(&pb, format!("{spec} → known app, resolving project"));
+                    if crate::universal::try_install(&app, &spec).await? {
                         continue;
                     }
                 }
@@ -115,9 +115,11 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
             }
             Resolution::NotFound { near_misses } => {
                 spinner::finish_err(&pb, format!("{spec} → not found"));
-                // Apps with their own install channels (npm globals,
-                // install.sh) come before the GitHub fallback.
-                if try_app_install(&app, &spec).await? {
+                // Universal resolver: identify the PROJECT, then offer its
+                // install methods with confidence scores. Handles cargo,
+                // brew, verified npm, release binaries, installer scripts,
+                // and source builds — identity-checked, never name-matched.
+                if crate::universal::try_install(&app, &spec).await? {
                     continue;
                 }
                 if near_misses.is_empty() {
@@ -128,9 +130,6 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                         near_misses.join(", ")
                     ));
                 }
-                // Last resort: a source build from GitHub. Always a
-                // dedicated confirmation, even under --yes.
-                try_source_build(&app, &spec).await?;
             }
         }
     }
@@ -192,8 +191,14 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     }
 
     // Ask for sudo NOW, before any spinner or bar starts drawing — the
-    // password prompt must never race live output for the terminal.
-    if !app.cli.dry_run {
+    // password prompt must never race live output for the terminal. Only
+    // when the planned commands actually need elevation (AUR helpers and
+    // plain downloads don't).
+    let needs_elevation = app.recipe().sources.iter().any(|s| {
+        to_install.iter().any(|h| h.source == s.id)
+            && s.install.as_ref().is_some_and(|c| c.elevated)
+    });
+    if !app.cli.dry_run && needs_elevation {
         crate::backend::elevate::preflight().await?;
     }
 
@@ -268,6 +273,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     };
 
     // Watch the interface counters for the whole install; aborted after.
+    // `credited` is shared with the monitor so the summary can report the
+    // real downloaded total.
+    let credited = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let monitor = crate::netmon::total_rx_bytes().map(|baseline| {
         crate::netmon::spawn_monitor(
             bar.clone(),
@@ -277,6 +285,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 None
             },
             baseline,
+            std::sync::Arc::clone(&credited),
         )
     });
 
@@ -345,8 +354,17 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         .map(|(s, p)| format!("{s} {}", p.len()))
         .collect::<Vec<_>>()
         .join(" · ");
+    let downloaded = credited.load(std::sync::atomic::Ordering::Relaxed);
+    let downloaded_note = if downloaded > 0 {
+        format!(
+            " · downloaded {}",
+            crate::maintenance::human_size(downloaded)
+        )
+    } else {
+        String::new()
+    };
     println!(
-        "\n{} {} installed{} · {} already present · {} failed · {:.1}s",
+        "\n{} {} installed{} · {} already present · {} failed{} · {:.1}s",
         if failures.is_empty() {
             style.ok("✔")
         } else {
@@ -360,6 +378,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         },
         already.len(),
         failures.len(),
+        downloaded_note,
         started.elapsed().as_secs_f64()
     );
     if failures.is_empty() {
@@ -395,262 +414,6 @@ async fn notice_updates(app: &App) {
         updates.len(),
         style.dim(&shown)
     );
-}
-
-/// App-channel installs (npm globals, install.sh). Returns true when the
-/// spec was handled here. npm apps go through the suspicious-package check
-/// first — px asks whether to investigate before anything touches npm.
-async fn try_app_install(app: &App, spec: &str) -> PxResult<bool> {
-    let style = &app.style;
-
-    let install = match crate::apps::registry_lookup(app, spec) {
-        Some(i) => Some(i),
-        None => crate::apps::npm_lookup(&app.client, spec).await?,
-    };
-    let Some(install) = install else {
-        return Ok(false);
-    };
-
-    match &install {
-        crate::apps::AppInstall::Npm { package, label } => {
-            println!(
-                "  {} {} installs via npm: {}",
-                style.bold("app"),
-                label,
-                style.bold(&format!("npm install -g {package}"))
-            );
-
-            if app.cli.dry_run {
-                println!(
-                    "  {} would run: npm install -g {package}",
-                    style.dim("[dry-run]")
-                );
-                return Ok(true);
-            }
-
-            // Already on PATH? Say so instead of failing on EEXIST later.
-            if let Ok(existing) = which::which(spec) {
-                println!(
-                    "  {} {} is already installed ({})",
-                    style.warn("⚠"),
-                    spec,
-                    style.dim(&existing.to_string_lossy())
-                );
-                if crate::ui::interactive() {
-                    if !crate::ui::prompt::confirm("reinstall / overwrite it?", false)? {
-                        println!("  {} skipped", style.dim("ok"));
-                        return Ok(true);
-                    }
-                } else {
-                    return Ok(true);
-                }
-            }
-
-            // Suspicious-package gate: analyze first (cheap, metadata only),
-            // ask to investigate when anything looks off.
-            let meta = crate::apps::npm_meta(&app.client, package).await;
-            let flags = meta
-                .as_ref()
-                .map(crate::security::analyze_npm)
-                .unwrap_or_default();
-            if !flags.is_empty() && crate::ui::interactive() {
-                println!(
-                    "  {} {}",
-                    style.warn("⚠"),
-                    flags
-                        .iter()
-                        .map(|f| f.reason.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                );
-                if crate::ui::prompt::confirm("want me to investigate before installing?", true)? {
-                    let report = crate::security::investigate(app, package).await?;
-                    println!("{report}");
-                    if !crate::ui::prompt::confirm("install it anyway?", false)? {
-                        println!("  {} skipped", style.dim("ok"));
-                        return Ok(true);
-                    }
-                }
-            }
-
-            if !app.cli.yes
-                && !crate::ui::prompt::confirm(&format!("install {package} via npm?"), false)?
-            {
-                println!("  {} skipped", style.dim("ok"));
-                return Ok(true);
-            }
-        }
-        crate::apps::AppInstall::Script { url, label } => {
-            println!(
-                "  {} {} installs via installer script: {}",
-                style.bold("app"),
-                label,
-                style.dim(&format!("curl -fsSL {url} | sh"))
-            );
-            if app.cli.dry_run {
-                println!(
-                    "  {} would run: curl -fsSL {url} | sh (after confirmation)",
-                    style.dim("[dry-run]")
-                );
-                return Ok(true);
-            }
-            // Script installs ALWAYS get their dedicated confirmation.
-            if !crate::ui::interactive()
-                || !crate::ui::prompt::confirm(
-                    &format!("download and run the {label} installer from {url}?"),
-                    false,
-                )?
-            {
-                println!("  {} skipped", style.dim("ok"));
-                return Ok(true);
-            }
-        }
-    }
-
-    // No live spinner here: npm and installer scripts inherit stdio and
-    // print their own output — a spinner next to them garbles the terminal.
-    println!("  {} installing {spec}…", style.dim("→"));
-    match crate::apps::install(app, &install, app.cli.dry_run, false).await {
-        Ok(()) => {
-            println!("  {} installed {}", style.ok("✔"), spec);
-            if !app.cli.dry_run {
-                let mut ledger = Ledger::load();
-                ledger.record(spec, "app");
-                ledger.save();
-            }
-            Ok(true)
-        }
-        Err(e) => {
-            // npm EEXIST: a previous install left the binary in place —
-            // offer the --force overwrite instead of a dead end.
-            let msg = format!("{e}");
-            if msg.contains("EEXIST") {
-                println!(
-                    "  {} {spec} binary already exists — npm refuses to overwrite",
-                    style.warn("⚠")
-                );
-                if crate::ui::interactive()
-                    && crate::ui::prompt::confirm("force-overwrite with npm --force?", false)?
-                {
-                    crate::apps::install(app, &install, app.cli.dry_run, true).await?;
-                    println!("  {} installed {} (forced)", style.ok("✔"), spec);
-                    if !app.cli.dry_run {
-                        let mut ledger = Ledger::load();
-                        ledger.record(spec, "app");
-                        ledger.save();
-                    }
-                    return Ok(true);
-                }
-            }
-            Err(PxError::User(format!("{spec} install failed: {e}")))
-        }
-    }
-}
-
-/// GitHub source-build fallback: search, show what's there, and ask the
-/// dedicated question. Never runs without an explicit yes — --yes does NOT
-/// cover source builds.
-async fn try_source_build(app: &App, spec: &str) -> PxResult<()> {
-    let style = &app.style;
-    let github_cfg = &app.recipe().github;
-    if !github_cfg.enabled || app.cli.no_source || !app.config.source_enabled {
-        return Ok(());
-    }
-
-    let pb = spinner::one(&format!("searching GitHub for {spec}…"));
-    let hits = crate::github::search(&app.client, spec, github_cfg.min_stars).await?;
-    if hits.is_empty() {
-        spinner::finish_warn(&pb, format!("no repo with ≥{} stars", github_cfg.min_stars));
-        return Ok(());
-    }
-    spinner::finish_ok(&pb, format!("{} candidate(s)", hits.len()));
-
-    // Show the candidates with their stars.
-    for hit in hits.iter().take(5) {
-        println!(
-            "  {} {} {} {}",
-            style.src("github"),
-            style.bold(&hit.full_name),
-            style.dim(&format!("★{}", hit.stars)),
-            style.dim(hit.description.as_deref().unwrap_or(""))
-        );
-    }
-
-    if app.cli.dry_run {
-        println!(
-            "  {} would offer to clone and build {} (needs confirmation)",
-            style.dim("[dry-run]"),
-            hits[0].full_name
-        );
-        return Ok(());
-    }
-
-    if !crate::ui::interactive() {
-        println!(
-            "  {} run px in a terminal to confirm a source build",
-            style.dim("(non-interactive)")
-        );
-        return Ok(());
-    }
-
-    let pick = if hits.len() == 1 {
-        0
-    } else {
-        let items: Vec<String> = hits
-            .iter()
-            .map(|h| {
-                format!(
-                    "{} ★{} {}",
-                    h.full_name,
-                    h.stars,
-                    h.description.clone().unwrap_or_default()
-                )
-            })
-            .collect();
-        crate::ui::prompt::select("which repo should I build?", &items)?
-    };
-    let repo = &hits[pick];
-
-    // THE dedicated confirmation.
-    let confirmed = crate::ui::prompt::confirm(
-        &format!(
-            "only a source build is available ({}). do you want me to download and build it for you?",
-            repo.url
-        ),
-        false,
-    )?;
-    if !confirmed {
-        println!("  {} skipped source build", style.dim("ok"));
-        return Ok(());
-    }
-
-    crate::backend::elevate::refuse_root()?;
-    let pb = spinner::one(&format!("cloning {}…", repo.full_name));
-    let dir = crate::github::clone(repo).await?;
-    let strategy = crate::github::detect_strategy(&dir).ok_or_else(|| {
-        PxError::User(format!(
-            "no recognized build system in {} (supported: cargo, go, cmake, make, meson)",
-            repo.full_name
-        ))
-    })?;
-    spinner::finish_ok(&pb, format!("builds with {}", strategy.label()));
-
-    let pb = spinner::one(&format!("building {}…", repo.full_name));
-    match crate::github::build_and_install(repo, &strategy, false, crate::sandbox::enabled(app))
-        .await
-    {
-        Ok(()) => {
-            spinner::finish_ok(&pb, format!("built and installed {}", repo.full_name));
-            let mut ledger = Ledger::load();
-            ledger.record(&repo.full_name, "github");
-            ledger.save();
-        }
-        Err(e) => {
-            spinner::finish_err(&pb, "build failed".into());
-            return Err(e);
-        }
-    }
-    Ok(())
 }
 
 /// `px -i` with nothing else: ask what to install.

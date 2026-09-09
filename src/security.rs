@@ -156,3 +156,126 @@ pub async fn investigate(app: &App, package: &str) -> PxResult<String> {
     }
     Ok(report)
 }
+
+// ------------------------------------------------- installer script scanning
+//
+// The static half of the sandbox check (the dynamic half is the bubblewrap
+// container the script ultimately runs in). These are patterns that honest
+// installers don't need and attackers love.
+
+/// Scan verdict.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verdict {
+    /// Nothing alarming found.
+    Clean,
+    /// Warning signs — show the user, let them decide.
+    Suspicious,
+    /// Hard red flags — px refuses to run it.
+    Dangerous,
+}
+
+#[derive(Debug)]
+pub struct ScriptScan {
+    pub verdict: Verdict,
+    pub flags: Vec<String>,
+}
+
+const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
+    (r"rm\s+-rf\s+/(?:\s|$|\*)", "destructive 'rm -rf /'"),
+    (r"rm\s+-rf\s+~", "destructive 'rm -rf ~' (home directory)"),
+    (
+        r">\s*/etc/sudoers",
+        "writes to /etc/sudoers (privilege escalation)",
+    ),
+    (r"chmod\s+777\s+/", "chmod 777 on system paths"),
+    (r"\bchattr\s+-i", "removes file immutability flags"),
+    (
+        r">\s*~/.?(bash|zsh)rc",
+        "appends to a shell rc file (persistence)",
+    ),
+    (r"/etc/cron", "writes to cron (persistence)"),
+    (
+        r"systemctl\s+(disable|mask)\s+(firewall|ufw|firewalld)",
+        "disables the firewall",
+    ),
+    (r"\bsetenforce\s+0", "disables SELinux"),
+    (
+        r"pkill\s+-9?\s*(clamav|ufw|firewalld)",
+        "kills security software",
+    ),
+    (r#"\beval\s+"\$\("#, "eval of command substitution"),
+    (
+        r#"base64\s+(-d|--decode)[^|]*\|\s*(ba)?sh"#,
+        "decodes base64 straight into a shell",
+    ),
+    (
+        r"\|\s*(ba)?sh\s*$",
+        "pipes a downloaded script into a shell (second stage)",
+    ),
+];
+
+const SUSPICIOUS_PATTERNS: &[(&str, &str)] = &[
+    (r"\bsudo\b", "uses sudo inside the installer"),
+    (
+        r#"curl[^|]{0,120}\|\s*(ba)?sh"#,
+        "downloads and executes remote code",
+    ),
+    (
+        r#"wget[^|]{0,120}\|\s*(ba)?sh"#,
+        "downloads and executes remote code",
+    ),
+    (r">\s*/etc/[a-z]", "writes under /etc"),
+    (r"/\.ssh/authorized_keys", "touches SSH authorized_keys"),
+    (r"\bnohup\b", "detaches a background process"),
+    (r"\bcron\b", "mentions cron"),
+];
+
+/// Scan installer-script text for red flags.
+pub fn scan_script_text(text: &str) -> ScriptScan {
+    let mut flags = Vec::new();
+
+    for (pattern, why) in DANGEROUS_PATTERNS {
+        if let Ok(re) = regex::Regex::new(pattern)
+            && re.is_match(text)
+        {
+            flags.push(why.to_string());
+        }
+    }
+    if !flags.is_empty() {
+        return ScriptScan {
+            verdict: Verdict::Dangerous,
+            flags,
+        };
+    }
+
+    for (pattern, why) in SUSPICIOUS_PATTERNS {
+        if let Ok(re) = regex::Regex::new(pattern)
+            && re.is_match(text)
+        {
+            flags.push(why.to_string());
+        }
+    }
+    ScriptScan {
+        verdict: if flags.is_empty() {
+            Verdict::Clean
+        } else {
+            Verdict::Suspicious
+        },
+        flags,
+    }
+}
+
+/// Fetch and scan a remote installer script.
+pub async fn scan_remote_script(client: &reqwest::Client, url: &str) -> PxResult<ScriptScan> {
+    let text = client
+        .get(url)
+        .send()
+        .await
+        .map_err(crate::error::PxError::Network)?
+        .error_for_status()
+        .map_err(crate::error::PxError::Network)?
+        .text()
+        .await
+        .map_err(crate::error::PxError::Network)?;
+    Ok(scan_script_text(&text))
+}

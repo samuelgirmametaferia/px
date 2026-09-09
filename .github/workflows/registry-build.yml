@@ -1,0 +1,50 @@
+# px upstream registry: scheduled discovery + build + publish.
+# Free-tier architecture: Actions scan, Releases distribute, Attestations sign.
+name: registry
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6h, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  discover-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tooling
+        run: cargo build --release --bin px-registry
+
+      # 1. unresolved-search-driven discovery: real px demand first
+      - name: Pull unresolved queries (demand-driven discovery)
+        run: |
+          curl -sf "$REPORTS_ENDPOINT/v1/unresolved" -H "Authorization: Bearer $REPORTS_TOKEN" \
+            -o unresolved.json || echo '[]' > unresolved.json
+
+      # 2. scan for new candidates: installer patterns in fresh repos
+      - name: Discover candidates
+        run: |
+          ./scripts/registry-discover.sh > candidates.jsonl || true
+          ./scripts/registry-deduplicate.sh candidates.jsonl unresolved.json > todo.jsonl
+
+      # 3. validate candidates in the disposable sandbox job
+      - name: Validate (container sandbox, no secrets, timeouts)
+        run: ./scripts/registry-validate.sh todo.jsonl validated.jsonl
+
+      # 4. incremental build: only changed shards are rebuilt
+      - name: Build changed shards
+        run: |
+          ./target/release/px-registry build \
+            --input <(cat registry-seed.jsonl validated.jsonl | sort -u) \
+            --out registry-out
+
+      # 5. publish immutable blobs + attested root
+      - name: Publish
+        run: ./scripts/registry-publish.sh registry-out
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

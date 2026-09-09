@@ -90,7 +90,8 @@ pub enum Command {
         specs: Vec<String>,
     },
 
-    /// Uninstall packages through your distro's own tools.
+    /// Uninstall packages — routed to whichever method installed them.
+    #[command(alias = "remove")]
     Uninstall { specs: Vec<String> },
 
     /// Upgrade every package on the system (pacman -Syu / apt upgrade / ...).

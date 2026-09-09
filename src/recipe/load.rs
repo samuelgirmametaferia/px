@@ -53,7 +53,7 @@ pub struct RecipeRepo {
 impl Default for RecipeRepo {
     fn default() -> Self {
         RecipeRepo {
-            repo: "arrow/px".into(),
+            repo: "samuelgirmametaferia/px".into(),
             branch: "main".into(),
         }
     }

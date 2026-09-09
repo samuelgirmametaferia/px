@@ -43,6 +43,9 @@ dirs = "6"
 regex = "1"
 walkdir = "2"
 sha2 = "0.10"
+blake3 = "1"
+ciborium = "0.2"
+zstd = "0.13"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
 [dev-dependencies]

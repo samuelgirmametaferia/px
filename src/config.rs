@@ -18,17 +18,23 @@ pub struct Config {
     pub source_enabled: bool,
     /// Sandbox mode: "auto" (on when bwrap exists), "on", "off".
     pub sandbox: String,
+    /// Upstream fallback registry: a directory or base URL. Empty = off.
+    pub upstream_registry: String,
+    /// Failure-telemetry endpoint (POST /v1/report). Empty = never send.
+    pub telemetry_endpoint: String,
     pub cache_search_secs: u64,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            recipe_repo: "arrow/px".into(),
+            recipe_repo: "samuelgirmametaferia/px".into(),
             recipe_branch: "main".into(),
             default_mode: "ask".into(),
             source_enabled: true,
             sandbox: "auto".into(),
+            upstream_registry: String::new(),
+            telemetry_endpoint: String::new(),
             cache_search_secs: 3600,
         }
     }
