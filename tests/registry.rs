@@ -284,30 +284,69 @@ fn unresolved_reports_never_contain_the_raw_query() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A stale cached root (registry republished with new shard hashes) must
-/// not poison lookups: shard verification failure triggers a root refresh
-/// and retry instead of falling through to nothing.
+/// A stale cached registry root (registry republished with new shard
+/// hashes under the same URL) must not poison lookups: shard verification
+/// failure triggers a root refresh and retry instead of erroring or
+/// returning nothing. Runs hermetically in a subprocess with an isolated
+/// XDG cache — the shared cache is owned by the parallel tests.
 #[test]
 fn stale_root_triggers_refresh_not_failure() {
-    let reg1 = build_registry(&[record("stale/app", &["staleapp"], 100, "validated")]);
-    // populate the cache against reg1's root
-    let _ = lookup(&reg1, "staleapp").expect("first lookup works");
+    let tmp = std::env::temp_dir().join(format!("px-stale-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let reg_dir = tmp.join("registry");
+    let cache = tmp.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
 
-    // republish: same app, rebuilt shards (different hashes), SAME cache dir
-    let reg2 = build_registry(&[record("stale/app", &["staleapp"], 100, "validated")]);
-    // reg2's shards differ by generated_at → different blake3 → the cached
-    // root from reg1 now pins hashes that fail verification
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let client = reqwest::Client::new();
-    let result = rt.block_on(registry::lookup(
-        &client,
-        &registry::RegistrySource::Dir(reg2.clone()),
-        "staleapp",
-    ));
-    // the stale root must be detected, refreshed against reg2, and resolve
+    let build_in_dir = |description: &str| {
+        let mut r = record("stale/app", &["staleapp"], 100, "validated");
+        r.description = description.to_string();
+        let input = tmp.join("apps.jsonl");
+        std::fs::write(&input, serde_json::to_string(&r).unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(&reg_dir);
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_px-registry"))
+            .args([
+                "build",
+                "--input",
+                input.to_str().unwrap(),
+                "--out",
+                reg_dir.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+    };
+
+    let check = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_px-registry"))
+            .args([
+                "check",
+                "--registry",
+                reg_dir.to_str().unwrap(),
+                "--query",
+                "staleapp",
+            ])
+            .env("XDG_CACHE_HOME", &cache)
+            .output()
+            .unwrap()
+    };
+
+    // v1 of the registry; the check caches its root + shards
+    build_in_dir("first version");
+    let out = check();
     assert!(
-        matches!(&result, Ok(Some(r)) if r.canonical_id == "github:stale/app"),
-        "stale root must refresh and resolve, got: {result:?}"
+        String::from_utf8_lossy(&out.stdout).contains("stale/app"),
+        "v1 must resolve"
     );
-    let _ = std::fs::remove_dir_all(registry::cache_dir());
+
+    // republish with different content (different shard hashes) in place;
+    // the cached root from v1 now pins stale hashes
+    build_in_dir("second version, republished");
+    let out = check();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("stale/app"),
+        "stale root must refresh and resolve, got: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
