@@ -133,11 +133,12 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                     universal_handled += 1;
                     continue;
                 }
+                // demand-driven discovery: report the miss (hashed, local
+                // queue, only sent when an endpoint is configured). A miss
+                // with near-suggestions is still an unresolved query.
+                crate::registry::telemetry::report_unresolved(&spec);
                 if near_misses.is_empty() {
                     problems.push(format!("{spec}: not found in any source"));
-                    // demand-driven discovery: report the miss (hashed,
-                    // local queue, only sent when an endpoint is configured)
-                    crate::registry::telemetry::report_unresolved(&spec);
                 } else {
                     problems.push(format!(
                         "{spec}: not found — did you mean {}?",

@@ -11,4 +11,4 @@ compatibility_date = "2026-09-01"
 binding = "DB"
 database_name = "px-reports"
 # paste from: wrangler d1 create px-reports
-database_id = "PASTE_YOUR_D1_DATABASE_ID"
+database_id = "38173f9b-f0bd-47ce-b0e6-c2441773d4a7"

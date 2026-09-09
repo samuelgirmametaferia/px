@@ -22,6 +22,8 @@ pub struct Config {
     pub upstream_registry: String,
     /// Failure-telemetry endpoint (POST /v1/report). Empty = never send.
     pub telemetry_endpoint: String,
+    /// Bearer token for the telemetry endpoint.
+    pub telemetry_token: String,
     pub cache_search_secs: u64,
 }
 
@@ -36,6 +38,7 @@ impl Default for Config {
             upstream_registry:
                 "https://github.com/samuelgirmametaferia/px/releases/latest/download".into(),
             telemetry_endpoint: String::new(),
+            telemetry_token: String::new(),
             cache_search_secs: 3600,
         }
     }

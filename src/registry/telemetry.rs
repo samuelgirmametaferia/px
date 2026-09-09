@@ -112,34 +112,46 @@ pub fn report_failure(
 }
 
 /// Flush queued reports to the configured endpoint (batched POST).
+/// Failures and unresolved queries are INDEPENDENT queues — each is sent
+/// on its own; an empty failures queue must not block unresolved reports
+/// (the common case: a search miss with no install attempted).
 /// No endpoint configured → nothing is sent, ever.
-pub async fn flush(client: &reqwest::Client, endpoint: &str) -> PxResultFlush {
+pub async fn flush(client: &reqwest::Client, endpoint: &str, token: &str) -> PxResultFlush {
     if endpoint.trim().is_empty() {
         return PxResultFlush::NoEndpoint;
     }
+    let auth = format!("Bearer {token}");
+    let mut sent = 0usize;
+
+    // ---- failures ----
     let path = report_path();
-    let Ok(existing) = std::fs::read_to_string(&path) else {
-        return PxResultFlush::Nothing;
-    };
-    let reports: Vec<FailureReport> = existing
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
-    if reports.is_empty() {
-        return PxResultFlush::Nothing;
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let reports: Vec<FailureReport> = existing
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        if !reports.is_empty() {
+            #[derive(Serialize)]
+            struct Batch {
+                reports: Vec<FailureReport>,
+            }
+            let n = reports.len();
+            let resp = client
+                .post(endpoint)
+                .header("Authorization", &auth)
+                .json(&Batch { reports })
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+            if matches!(&resp, Ok(r) if r.status().is_success()) {
+                // sent reports are consumed; failures stay queued for retry
+                let _ = std::fs::remove_file(&path);
+                sent += n;
+            }
+        }
     }
-    #[derive(Serialize)]
-    struct Batch {
-        reports: Vec<FailureReport>,
-    }
-    let n = reports.len();
-    let resp = client
-        .post(endpoint)
-        .json(&Batch { reports })
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await;
-    // unresolved queries ride along to the sibling endpoint (best effort)
+
+    // ---- unresolved queries (hashed) ----
     let unresolved_file = unresolved_path();
     if let Ok(existing) = std::fs::read_to_string(&unresolved_file) {
         let queries: Vec<UnresolvedReport> = existing
@@ -152,27 +164,25 @@ pub async fn flush(client: &reqwest::Client, endpoint: &str) -> PxResultFlush {
                 queries: Vec<UnresolvedReport>,
             }
             let base = endpoint.trim_end_matches("/v1/report");
-            let _ = client
+            let n = queries.len();
+            let resp = client
                 .post(format!("{base}/v1/unresolved"))
+                .header("Authorization", &auth)
                 .json(&UnresolvedBatch { queries })
                 .timeout(std::time::Duration::from_secs(5))
                 .send()
-                .await
-                .map(|r| r.status().is_success())
-                .map(|ok| {
-                    if ok {
-                        let _ = std::fs::remove_file(&unresolved_file);
-                    }
-                });
+                .await;
+            if matches!(&resp, Ok(r) if r.status().is_success()) {
+                let _ = std::fs::remove_file(&unresolved_file);
+                sent += n;
+            }
         }
     }
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            // sent reports are consumed; failures stay queued for retry
-            let _ = std::fs::remove_file(&path);
-            PxResultFlush::Sent(n)
-        }
-        _ => PxResultFlush::Failed, // keep the queue, retry next time
+
+    if sent > 0 {
+        PxResultFlush::Sent(sent)
+    } else {
+        PxResultFlush::Nothing
     }
 }
 

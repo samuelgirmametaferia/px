@@ -158,8 +158,26 @@ impl App {
                 );
         }
 
+        // capture the telemetry config before self is consumed
+        let telemetry = (
+            self.config.telemetry_endpoint.clone(),
+            self.config.telemetry_token.clone(),
+            self.client.clone(),
+        );
         let result = self.run_inner().await;
         crate::state::release_lock();
+
+        // Telemetry flush: best-effort, after the command's work is done —
+        // never blocks, never fails the command, only runs when an endpoint
+        // is configured. Reports are scrubbed (hashes + time buckets only).
+        let (endpoint, token, client) = telemetry;
+        if !endpoint.trim().is_empty() {
+            let _ = tokio::spawn(async move {
+                let _ = crate::registry::telemetry::flush(&client, &endpoint, &token).await;
+            })
+            .await;
+        }
+
         result
     }
 

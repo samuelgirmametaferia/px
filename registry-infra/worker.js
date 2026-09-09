@@ -69,14 +69,17 @@ export default {
     // ---- repair Action: aggregated failures -------------------------------
     if (url.pathname === "/v1/failures" && request.method === "GET") {
       if (unauthorized(env, request)) return new Response("forbidden", { status: 403 });
-      const since = url.searchParams.get("since") || "168h";
+      // "48h" / "168h" / "720h" → SQLite modifier "-48 hours"
+      const raw = url.searchParams.get("since") || "168h";
+      const hours = parseInt(raw, 10);
+      const modifier = Number.isFinite(hours) && hours > 0 ? `-${hours} hours` : "-168 hours";
       const { results } = await env.DB.prepare(
         `SELECT record_id, error_class, COUNT(*) as n, MAX(received_at) as last
          FROM reports
-         WHERE received_at >= datetime('now', '-' || ?)
+         WHERE received_at >= datetime('now', ?)
          GROUP BY record_id, error_class
          ORDER BY n DESC LIMIT 1000`,
-      ).bind(since).all();
+      ).bind(modifier).all();
       return Response.json(results);
     }
 
@@ -86,7 +89,7 @@ export default {
       const { results } = await env.DB.prepare(
         `SELECT query_hash, COUNT(*) as n, MAX(received_at) as last
          FROM unresolved
-         WHERE received_at >= datetime('now', '-720h')
+         WHERE received_at >= datetime('now', '-720 hours')
          GROUP BY query_hash
          ORDER BY n DESC LIMIT 500`,
       ).all();
