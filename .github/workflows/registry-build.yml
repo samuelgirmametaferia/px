@@ -31,6 +31,27 @@ jobs:
         run: |
           ./scripts/registry-discover.sh > candidates.jsonl || true
           ./scripts/registry-deduplicate.sh candidates.jsonl unresolved.json > todo.jsonl
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2b. publish the candidate list to the `candidates` branch so
+      #     `px registry candidates` (and humans) can inspect what discovery
+      #     found — committed, not lost in CI logs
+      - name: Publish candidate list
+        run: |
+          if [ -s candidates.jsonl ]; then
+            git config user.name "px-registry-bot"
+            git config user.email "actions@github.com"
+            git checkout --orphan candidates || git checkout candidates
+            git rm -rf --quiet . || true
+            cp "$GITHUB_WORKSPACE/candidates.jsonl" . 2>/dev/null || true
+            date -u +%FT%TZ > .last-discovery
+            git add candidates.jsonl .last-discovery
+            git commit -qm "discovery candidates $(date -u +%FT%TZ)" || true
+            git push -q origin HEAD:candidates -f
+          else
+            echo "no candidates found this run"
+          fi
 
       # 3. validate candidates in the disposable sandbox job
       - name: Validate (container sandbox, no secrets, timeouts)

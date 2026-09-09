@@ -205,6 +205,7 @@ impl App {
             Command::Uninstall { specs } => commands::uninstall::run(self, &specs).await,
             Command::Upgrade => commands::upgrade::run(self).await,
             Command::Completions { shell } => commands::completions::run(self, &shell),
+            Command::Candidates => commands::candidates::run(self).await,
             Command::Suggest => commands::suggest::run(self).await,
             Command::Status => commands::status::run(self).await,
             Command::Search { term } => commands::search::run(self, &term.join(" ")).await,

@@ -100,6 +100,9 @@ pub enum Command {
     /// Generate shell completions (bash, zsh, fish, ...).
     Completions { shell: String },
 
+    /// Repos the GitHub discovery system has found (candidates branch).
+    Candidates,
+
     /// Find unused/unneeded packages and offer to remove them (free space).
     Suggest,
 

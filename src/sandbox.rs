@@ -79,7 +79,11 @@ pub fn wrap_argv(argv: &[String], extra_writable: &[String]) -> Vec<String> {
         wrapped.push(dir.clone());
         wrapped.push(dir.clone());
     }
-    // env passthrough so npm/cargo/go find their config and caches
+    // env passthrough so npm/cargo/go find their config, caches, and —
+    // critically — their INSTALL ROOTS. A user with CARGO_INSTALL_ROOT or
+    // GOBIN pointing at ~/.local/bin must get sandboxed installs in the
+    // same place their shell expects; dropping these splits the install
+    // across two homes and the user's own tooling can't see it.
     wrapped.push("--clearenv".into());
     for key in [
         "PATH",
@@ -90,7 +94,19 @@ pub fn wrap_argv(argv: &[String], extra_writable: &[String]) -> Vec<String> {
         "TMPDIR",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
         "npm_config_prefix",
+        "CARGO_HOME",
+        "CARGO_INSTALL_ROOT",
+        "RUSTUP_HOME",
+        "GOPATH",
+        "GOBIN",
+        "GEM_HOME",
+        "GEM_PATH",
+        "PIPX_HOME",
+        "PIPX_BIN_DIR",
+        "VIRTUAL_ENV",
     ] {
         if let Ok(v) = std::env::var(key) {
             wrapped.push("--setenv".into());

@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod candidates;
 pub mod completions;
 pub mod doctor;
 pub mod info;

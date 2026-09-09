@@ -791,6 +791,19 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
         chosen_for_ledger.label()
     );
 
+    // Package name ≠ command name — say it loud, or the user types the
+    // wrong command (installed `agent-code`, runs `agent`).
+    if let Some(bin) = &binary
+        && bin != spec
+    {
+        println!(
+            "\n    {} the command is {} — not {}",
+            style.bold("▶"),
+            style.bold(&format!("{bin}")),
+            style.dim(spec)
+        );
+    }
+
     // Record the install with full identity for remove/update.
     if !app.cli.dry_run {
         let mut ledger = crate::ledger::Ledger::load();
