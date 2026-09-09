@@ -98,6 +98,7 @@ impl Ledger {
         project: &str,
         method: &Method,
         binary: Option<&str>,
+        binary_path: Option<&str>,
     ) {
         let name = match method {
             Method::Cargo { crate_name } => crate_name.clone(),
@@ -129,7 +130,7 @@ impl Ledger {
             Some(query.to_string()),
             Some(project.to_string()),
             binary.map(|b| b.to_string()),
-            None,
+            binary_path.map(|b| b.to_string()),
         );
     }
 

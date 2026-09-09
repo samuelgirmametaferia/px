@@ -85,10 +85,10 @@ async fn run_sandboxed_quiet(app: &App, argv: &[String]) -> PxResult<()> {
     if out.success() {
         return Ok(());
     }
-    print_tail(argv, &out);
+    let tail = print_tail(argv, &out);
     Err(PxError::Command {
         cmd: argv.join(" "),
-        stderr: "(see output above)".into(),
+        stderr: tail,
     })
 }
 
@@ -98,24 +98,30 @@ async fn run_plain_quiet(app: &App, argv: &[String]) -> PxResult<()> {
     if out.success() {
         return Ok(());
     }
-    print_tail(argv, &out);
+    let tail = print_tail(argv, &out);
     Err(PxError::Command {
         cmd: argv.join(" "),
-        stderr: "(see output above)".into(),
+        stderr: tail,
     })
 }
 
-fn print_tail(argv: &[String], out: &crate::exec::ExecOutput) {
+fn print_tail(argv: &[String], out: &crate::exec::ExecOutput) -> String {
     let combined = format!("{}{}", out.stdout, out.stderr);
     if combined.trim().is_empty() {
-        return;
+        return String::new();
     }
     let lines: Vec<&str> = combined.lines().collect();
     let start = lines.len().saturating_sub(15);
     eprintln!("  ── last lines of: {} ──", argv.join(" "));
+    let mut tail = String::new();
     for line in &lines[start..] {
         eprintln!("  {line}");
+        tail.push_str(line);
+        tail.push('\n');
     }
+    // the real tail, so CALLERS can pattern-match the failure ("nothing
+    // to install") and react — not "(see output above)"
+    tail
 }
 
 /// Verify the expected binary exists and executes. Checks PATH first,

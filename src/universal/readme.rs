@@ -75,16 +75,17 @@ pub async fn discover(client: &reqwest::Client, repo: &str) -> Vec<Candidate> {
     )
     .unwrap();
     if let Some(caps) = script_re.captures(&readme)
-        && let Some(url) = caps.get(1) {
-            candidates.push(Candidate {
-                method: Method::Script {
-                    url: url.as_str().to_string(),
-                },
-                confidence: 60,
-                note: "installer script referenced in README".into(),
-                pinned_sha: None,
-            });
-        }
+        && let Some(url) = caps.get(1)
+    {
+        candidates.push(Candidate {
+            method: Method::Script {
+                url: url.as_str().to_string(),
+            },
+            confidence: 60,
+            note: "installer script referenced in README".into(),
+            pinned_sha: None,
+        });
+    }
 
     candidates
 }
@@ -102,9 +103,10 @@ async fn fetch_readme(client: &reqwest::Client, repo: &str) -> Option<String> {
             let url = format!("https://raw.githubusercontent.com/{repo}/{branch}/{name}");
             if let Ok(resp) = client.get(&url).send().await
                 && resp.status().is_success()
-                    && let Ok(text) = resp.text().await {
-                        return Some(text);
-                    }
+                && let Ok(text) = resp.text().await
+            {
+                return Some(text);
+            }
         }
     }
     None

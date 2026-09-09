@@ -224,16 +224,21 @@ pub async fn resolve(app: &App, spec: &str) -> PxResult<Option<(Project, Vec<Can
     }
 
     // 2. crates.io: a crate with a repository link establishes identity
-    //    AND a high-confidence cargo method in one shot.
-    if let Some((repo, desc)) = cratesio_identity(&app.client, spec).await {
-        let mut candidates = vec![Candidate {
-            method: Method::Cargo {
-                crate_name: spec.to_string(),
-            },
-            confidence: 90,
-            note: "published on crates.io".into(),
-            pinned_sha: None,
-        }];
+    //    AND a high-confidence cargo method in one shot — but ONLY if the
+    //    crate actually produces a binary (many crates are libraries; the
+    //    is-even case: name exists on crates.io AND npm, the crate is a lib).
+    if let Some((repo, mut desc)) = cratesio_identity(&app.client, spec).await {
+        let mut candidates = Vec::new();
+        if crate_has_binaries(&app.client, &repo).await {
+            candidates.push(Candidate {
+                method: Method::Cargo {
+                    crate_name: spec.to_string(),
+                },
+                confidence: 90,
+                note: "published on crates.io".into(),
+                pinned_sha: None,
+            });
+        }
         // README may document more methods (brew tap, installer…)
         candidates.extend(readme::discover(&app.client, &repo).await);
         candidates.push(Candidate {
@@ -242,6 +247,22 @@ pub async fn resolve(app: &App, spec: &str) -> PxResult<Option<(Project, Vec<Can
             note: "build from the repository".into(),
             pinned_sha: None,
         });
+        // crates.io identity but no installable binary → npm may be the
+        // real distribution channel (name equality is NOT identity, but the
+        // npm package's repository link lets us verify it)
+        if let Some((npm_repo, npm_desc)) = npm_identity(&app.client, spec).await
+            && npm_repo.as_deref() == Some(repo.as_str())
+        {
+            candidates.push(Candidate {
+                method: Method::Npm {
+                    package: spec.to_string(),
+                },
+                confidence: 90,
+                note: "npm package linked to the same repository".into(),
+                pinned_sha: None,
+            });
+            desc = desc.or(npm_desc);
+        }
         let project = Project {
             canonical: repo,
             description: desc,
@@ -251,33 +272,81 @@ pub async fn resolve(app: &App, spec: &str) -> PxResult<Option<(Project, Vec<Can
         return Ok(Some((project, candidates)));
     }
 
-    // 3. GitHub search: the repo itself is the identity.
+    // 3. GitHub search: the repo itself is the identity — but only when
+    //    the repo NAME matches the query. A text-search hit on an unrelated
+    //    repo ("is-even" → Zyphra/Zonos) is identity 20: shown, never
+    //    silently installed.
     let hits = crate::github::search(&app.client, spec, 3)
         .await
         .unwrap_or_default();
-    if let Some(hit) = hits.first() {
+    if let Some(mut hit) = hits.first().cloned() {
+        let repo_name = hit
+            .full_name
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
+        let spec_norm = crate::registry::normalize_alias(spec);
+        let name_match = repo_name == spec_norm
+            || repo_name.contains(&spec_norm)
+            || spec_norm.contains(&repo_name);
+        let identity_confidence = if name_match { 70 } else { 20 };
         let mut candidates = readme::discover(&app.client, &hit.full_name).await;
-        candidates.push(Candidate {
-            method: Method::Release {
-                repo: hit.full_name.clone(),
-            },
-            confidence: 60,
-            note: "latest GitHub release".into(),
-            pinned_sha: None,
-        });
-        candidates.push(Candidate {
-            method: Method::Source {
-                repo: hit.full_name.clone(),
-            },
-            confidence: 60,
-            note: "build from the repository".into(),
-            pinned_sha: None,
-        });
+        // npm cross-verification: an npm package of this name whose
+        // repository field points at the repo we found = the same project,
+        // verified from two independent sources
+        if let Some((npm_repo, npm_desc)) = npm_identity(&app.client, spec).await
+            && npm_repo.as_deref() == Some(hit.full_name.as_str())
+        {
+            candidates.push(Candidate {
+                method: Method::Npm {
+                    package: spec.to_string(),
+                },
+                confidence: 90,
+                note: "npm package linked to this repository (cross-verified)".into(),
+                pinned_sha: None,
+            });
+            if hit.description.is_none() && npm_desc.is_some() {
+                hit.description = npm_desc;
+            }
+        }
+        // documented install methods are authoritative — the generic
+        // release/source guesses only appear when nothing else is known
+        // (spec: documented > found-on-disk)
+        if candidates.is_empty() {
+            candidates.push(Candidate {
+                method: Method::Release {
+                    repo: hit.full_name.clone(),
+                },
+                confidence: identity_confidence,
+                note: "latest GitHub release".into(),
+                pinned_sha: None,
+            });
+            candidates.push(Candidate {
+                method: Method::Source {
+                    repo: hit.full_name.clone(),
+                },
+                confidence: identity_confidence,
+                note: "build from the repository".into(),
+                pinned_sha: None,
+            });
+        }
+        for c in &mut candidates {
+            // README-documented methods keep their own confidence when the
+            // repo name matched; otherwise they're capped by the weak identity
+            if !name_match {
+                c.confidence = c.confidence.min(20);
+            }
+        }
         let project = Project {
             canonical: hit.full_name.clone(),
             description: hit.description.clone(),
             binary: None,
-            evidence: "GitHub repository search".into(),
+            evidence: if name_match {
+                "GitHub repository search (name matches)".into()
+            } else {
+                "GitHub text search — IDENTITY UNVERIFIED, name does not match".into()
+            },
         };
         return Ok(Some((project, candidates)));
     }
@@ -376,6 +445,43 @@ fn registry_method_to_method(m: &crate::registry::schema::RegistryMethod) -> Opt
     })
 }
 
+/// Does this crate's repository produce an installable binary?
+/// Checks Cargo.toml for [[bin]] or the presence of src/main.rs. Library-
+/// only crates (the is-even case) must not be offered via cargo install.
+async fn crate_has_binaries(client: &reqwest::Client, repo: &str) -> bool {
+    for branch in ["main", "master"] {
+        let url = format!("https://raw.githubusercontent.com/{repo}/{branch}/Cargo.toml");
+        let Ok(resp) = client.get(&url).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(toml_text) = resp.text().await else {
+            continue;
+        };
+        if toml_text.contains("[[bin]]") {
+            return true;
+        }
+        if toml_text.contains("[lib]") && !toml_text.contains("path = \"src/main.rs\"") {
+            // explicit lib section without a bin — check for main.rs anyway
+            let main_url = format!("https://raw.githubusercontent.com/{repo}/{branch}/src/main.rs");
+            if let Ok(r) = client.get(main_url).send().await {
+                return r.status().is_success();
+            }
+            return false;
+        }
+        // no lib section: a default src/main.rs binary is the Cargo default
+        let main_url = format!("https://raw.githubusercontent.com/{repo}/{branch}/src/main.rs");
+        if let Ok(r) = client.get(main_url).send().await {
+            return r.status().is_success();
+        }
+    }
+    // can't tell — don't punish unknown repos; cargo install will error
+    // clearly if it's a library
+    true
+}
+
 #[derive(Deserialize)]
 struct CratesCrate {
     #[serde(default)]
@@ -396,10 +502,25 @@ async fn cratesio_identity(
     client: &reqwest::Client,
     name: &str,
 ) -> Option<(String, Option<String>)> {
+    // disk cache: crates.io rate-limits hard, and identity doesn't change
+    let cache_key = format!("cratesio:{name}");
+    if let Some(cached) =
+        crate::cache::get("identity", &cache_key, std::time::Duration::from_secs(3600))
+    {
+        if cached == "miss" {
+            return None;
+        }
+        if let Ok(pair) = serde_json::from_str::<(String, Option<String>)>(&cached) {
+            return Some(pair);
+        }
+    }
     let url = format!("https://crates.io/api/v1/crates/{name}");
     let resp = client
         .get(url)
-        .header("User-Agent", "px package manager")
+        .header(
+            "User-Agent",
+            "px package manager (github.com/samuelgirmametaferia/px)",
+        )
         .send()
         .await
         .ok()?;
@@ -410,7 +531,11 @@ async fn cratesio_identity(
     let krate = body.krate?;
     let repo = krate.repository?;
     let normalized = normalize_repo(&repo)?;
-    Some((normalized, krate.description))
+    let pair = (normalized, krate.description);
+    if let Ok(json) = serde_json::to_string(&pair) {
+        crate::cache::put("identity", &cache_key, &json);
+    }
+    Some(pair)
 }
 
 #[derive(Deserialize)]
@@ -638,7 +763,66 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
         style.dim("→"),
         chosen.method.label()
     );
-    let method_binary = exec::execute(app, &chosen.method).await?;
+    let method_binary = match exec::execute(app, &chosen.method).await {
+        Ok(bin) => bin,
+        Err(first_err) => {
+            // A failed method is not a failed resolution — try the next
+            // candidate (release without linux assets → the README's npm
+            // method; a cargo crate that's a library → anything else).
+            let library_deadend = matches!(chosen.method, Method::Cargo { .. })
+                && format!("{first_err}").contains("nothing to install");
+            if library_deadend {
+                println!(
+                    "    {} crate is a library, not a program — trying the next method",
+                    style.warn("⚠")
+                );
+            } else {
+                println!(
+                    "    {} {} failed — trying the next method",
+                    style.warn("⚠"),
+                    chosen.method.label()
+                );
+            }
+            let mut result: Option<Option<String>> = None;
+            for next in candidates.iter() {
+                if next.method.label() == chosen.method.label() {
+                    continue;
+                }
+                // after a library dead-end, further cargo/source attempts
+                // on the same library will fail the same way
+                if library_deadend
+                    && matches!(next.method, Method::Cargo { .. } | Method::Source { .. })
+                {
+                    continue;
+                }
+                println!(
+                    "    {} installing via {}",
+                    style.dim("→"),
+                    next.method.label()
+                );
+                match exec::execute(app, &next.method).await {
+                    Ok(bin) => {
+                        result = Some(bin);
+                        break;
+                    }
+                    Err(e2) => {
+                        tracing::debug!("method {} failed: {e2}", next.method.label());
+                    }
+                }
+            }
+            // every method under this identity failed as a library →
+            // the same name on npm, WITH a repository link, is a
+            // verified identity of its own project (http-server the
+            // Rust lib vs http-party/http-server the CLI)
+            if result.is_none() && library_deadend {
+                result = npm_library_fallback(app, spec, &project).await?;
+            }
+            match result {
+                Some(bin) => bin,
+                None => return Err(first_err),
+            }
+        }
+    };
     // the registry knows the real executable name (package ≠ binary);
     // it beats the method's guess (cargo installs `agent`, not `agent-code`)
     let binary = project.binary.clone().or(method_binary);
@@ -649,6 +833,7 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
     );
 
     // Package name ≠ executable name: verify the binary exists and runs.
+    let mut verified_path: Option<String> = None;
     if let Some(bin) = &binary {
         match exec::verify_binary(bin).await {
             Ok(path) => {
@@ -658,6 +843,7 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
                     style.bold(bin),
                     style.dim(&path)
                 );
+                verified_path = Some(path);
             }
             Err(e) => {
                 println!(
@@ -671,7 +857,13 @@ pub async fn try_install(app: &App, spec: &str) -> PxResult<bool> {
     // Record the install with full identity for remove/update.
     if !app.cli.dry_run {
         let mut ledger = crate::ledger::Ledger::load();
-        ledger.record_universal(spec, &project.canonical, &chosen.method, binary.as_deref());
+        ledger.record_universal(
+            spec,
+            &project.canonical,
+            &chosen.method,
+            binary.as_deref(),
+            verified_path.as_deref(),
+        );
         ledger.save();
     }
     Ok(true)
@@ -723,4 +915,60 @@ pub async fn exec_script_sandboxed(app: &App, url: &str) -> PxResult<()> {
 /// Pinned installer sha256 for a candidate, when the registry recorded one.
 fn chosen_pinned_sha(c: &Candidate) -> Option<String> {
     c.pinned_sha.clone()
+}
+
+/// After a library dead-end under the crates.io identity: the same name on
+/// npm, WITH its own repository link, is a verified identity of a possibly
+/// different project (the http-server case). A bare npm name with no repo
+/// link stays confidence 20 — never installed silently.
+async fn npm_library_fallback(
+    app: &App,
+    spec: &str,
+    original: &Project,
+) -> PxResult<Option<Option<String>>> {
+    let Some((npm_repo, desc)) = npm_identity(&app.client, spec).await else {
+        return Ok(None);
+    };
+    let Some(repo) = npm_repo else {
+        println!(
+            "    {} an npm package named '{spec}' exists but has no repository link — identity unverified, not installing",
+            app.style.warn("⚠")
+        );
+        return Ok(None);
+    };
+    if repo == original.canonical {
+        return Ok(None); // same project — already exhausted
+    }
+    println!(
+        "\n    {} {spec} on npm is a different project: {}",
+        app.style.ok("✓"),
+        app.style.bold(&repo)
+    );
+    let method = Method::Npm {
+        package: spec.to_string(),
+    };
+    println!(
+        "    {} installing via {}",
+        app.style.dim("→"),
+        method.label()
+    );
+    let bin = exec::execute(app, &method).await?;
+    let binary = bin.clone();
+    let project = Project {
+        canonical: repo.clone(),
+        description: desc,
+        binary: binary.clone(),
+        evidence: "npm package with a repository link (library namesake fallback)".into(),
+    };
+    println!(
+        "    {} binary: {}",
+        app.style.ok("✔"),
+        binary.as_deref().unwrap_or("unknown")
+    );
+    if !app.cli.dry_run {
+        let mut ledger = crate::ledger::Ledger::load();
+        ledger.record_universal(spec, &project.canonical, &method, binary.as_deref(), None);
+        ledger.save();
+    }
+    Ok(Some(bin))
 }

@@ -77,3 +77,24 @@ cargo test          # 32 tests: recipes, command_gen (3 distros), parsers,
 cargo clippy --all-targets   # zero warnings
 cargo fmt --check
 ```
+
+## Universal install method matrix (verified 2026-09-09)
+
+Every install method, verified end-to-end through `px install`:
+
+| method | test package | result |
+|---|---|---|
+| script (pinned hash + sandbox) | pxfake-e2e (tests/fakepkg.rs, local HTTP) | ✔ install + binary runs; hash mismatch STOPS install |
+| cargo | agent-code (avala-ai) | ✔ sandboxed build, `agent 0.30.0` |
+| npm | nodemon (remy/nodemon) | ✔ cross-verified identity (npm repo == GitHub repo), `3.1.14` |
+| go | pxtest-go (samuelgirmametaferia/pxtest-go) | ✔ `go install ...@latest`, binary runs |
+| pipx | when-changed (pypi) | ✔ binary at ~/.local/bin/when-changed |
+| release binary | pxtest-go v1.0.0 release | asset selection ✔ (correct tar.gz + checksums.txt detected from a real release); download blocked by this network's broken github-release CDN route — curl fails identically |
+| gem / brew | (tools not installed) | ✔ correctly filtered out of candidates |
+| source build | exercised in fallthroughs | ✔ correctly refused for JS-only repos (nodemon) |
+
+Also verified live: the fakepkg hostile-installer scan (rc-persistence +
+base64-into-shell = Dangerous), dead-record tombstones, library-crate
+fallthrough (crates.io `is-even` is a library → npm namesake with its own
+repo link = a different verified project), and `px remove <binary-name>`
+routing to `cargo uninstall <crate-name>` via the install DB.

@@ -11,18 +11,18 @@ use crate::error::{PxError, PxResult};
 
 #[derive(Debug, Deserialize)]
 pub struct GhAsset {
-    name: String,
-    browser_download_url: String,
+    pub name: String,
+    pub browser_download_url: String,
     #[serde(default)]
     #[allow(dead_code)]
-    size: u64,
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GhRelease {
-    tag_name: String,
+    pub tag_name: String,
     #[serde(default)]
-    assets: Vec<GhAsset>,
+    pub assets: Vec<GhAsset>,
 }
 
 /// The asset we'd install for this machine, if any.

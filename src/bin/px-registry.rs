@@ -205,9 +205,7 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
         alias_infos.extend(build_one_shard::<px::registry::AliasEntry>(
             &alias_tmp, base, "alias", shard,
         )?);
-        app_infos.extend(build_one_shard::<AppEntry>(
-            &app_tmp, base, "app", shard,
-        )?);
+        app_infos.extend(build_one_shard::<AppEntry>(&app_tmp, base, "app", shard)?);
     }
 
     // Root manifest

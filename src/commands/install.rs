@@ -85,9 +85,13 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 // candidate (the AUR's codex-app-electron-port-bin for
                 // "codex", agentfs-bin for "agent").
                 let known_identity = crate::universal::registry::lookup(&spec).is_some()
-                    || registry_exact_hit(&app, &spec).await;
+                    || registry_exact_hit(&app, &spec).await
+                    || universal_verified_identity(&app, &spec).await;
                 if known_identity {
-                    spinner::finish_warn(&pb, format!("{spec} → exact identity match, resolving project"));
+                    spinner::finish_warn(
+                        &pb,
+                        format!("{spec} → exact identity match, resolving project"),
+                    );
                     if crate::universal::try_install(&app, &spec).await? {
                         universal_handled += 1;
                         continue;
@@ -448,7 +452,6 @@ pub async fn interactive(app: App) -> PxResult<()> {
     }
 }
 
-
 /// Does the upstream registry resolve this exact query? (Cheap: shards
 /// are cached after the first fetch.)
 async fn registry_exact_hit(app: &App, spec: &str) -> bool {
@@ -459,4 +462,23 @@ async fn registry_exact_hit(app: &App, spec: &str) -> bool {
         crate::registry::lookup(&app.client, &source, spec).await,
         Ok(Some(rec)) if !rec.is_dead()
     )
+}
+
+/// Does resolution establish a VERIFIED identity for this query — a
+/// crates.io crate with a repository link, or an npm package with one?
+/// A verified identity (confidence >= 80) beats any fuzzy package-name
+/// match in any repo ("http-server" → http-party/http-server, not the
+/// AUR's http-server-upload).
+async fn universal_verified_identity(app: &App, spec: &str) -> bool {
+    // skip the heavy tiers when the query is clearly not a project name
+    match crate::universal::resolve(app, spec).await {
+        Ok(Some((project, candidates))) => {
+            let verified = candidates.iter().any(|c| c.confidence >= 80);
+            if verified {
+                tracing::debug!("verified identity for {spec}: {}", project.canonical);
+            }
+            verified
+        }
+        _ => false,
+    }
 }
