@@ -19,24 +19,26 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     // Interrupted install? Offer to resume exactly what's left.
     let mut specs: Vec<String> = specs.to_vec();
     if let Some(journal) = crate::state::read_journal()
-        && !journal.remaining.is_empty() && !journal.done.is_empty() {
-            println!(
-                "{} px was interrupted mid-install — left to do: {}",
-                style.warn("⚠"),
-                style.bold(&journal.remaining.join(", "))
-            );
-            if crate::ui::interactive()
-                && !app.cli.dry_run
-                && crate::ui::prompt::confirm("resume that install first?", true)?
-            {
-                specs = journal.remaining.clone();
-            } else if crate::ui::interactive() && !app.cli.dry_run {
-                // explicit decline — drop the stale plan
-                crate::state::clear_journal();
-            }
-            // non-interactive / dry-run: keep the journal untouched; it may
-            // still be resumable from a terminal later.
+        && !journal.remaining.is_empty()
+        && !journal.done.is_empty()
+    {
+        println!(
+            "{} px was interrupted mid-install — left to do: {}",
+            style.warn("⚠"),
+            style.bold(&journal.remaining.join(", "))
+        );
+        if crate::ui::interactive()
+            && !app.cli.dry_run
+            && crate::ui::prompt::confirm("resume that install first?", true)?
+        {
+            specs = journal.remaining.clone();
+        } else if crate::ui::interactive() && !app.cli.dry_run {
+            // explicit decline — drop the stale plan
+            crate::state::clear_journal();
         }
+        // non-interactive / dry-run: keep the journal untouched; it may
+        // still be resumable from a terminal later.
+    }
 
     let providers = app.providers();
     let installers = app.installers();
@@ -174,7 +176,12 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
         .iter()
         .map(|h| resolver::plan_line(style, h))
         .collect();
-    let width = plan.iter().map(|l| l.len()).max().unwrap_or(30).min(80);
+    let width = plan
+        .iter()
+        .map(|l| crate::ui::table::visible_len(l))
+        .max()
+        .unwrap_or(30)
+        .min(80);
     println!();
     println!("{}", crate::ui::table::panel("install plan", &plan, width));
     println!();
@@ -230,6 +237,7 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                 let ctx = crate::backend::InstallCtx {
                     assume_yes: app.cli.yes,
                     dry_run: app.cli.dry_run,
+                    verbose: app.cli.verbose > 0,
                 };
                 match installer.install(pkgs, ctx).await {
                     Ok(()) => {
@@ -339,6 +347,24 @@ async fn try_app_install(app: &App, spec: &str) -> PxResult<bool> {
                 return Ok(true);
             }
 
+            // Already on PATH? Say so instead of failing on EEXIST later.
+            if let Ok(existing) = which::which(spec) {
+                println!(
+                    "  {} {} is already installed ({})",
+                    style.warn("⚠"),
+                    spec,
+                    style.dim(&existing.to_string_lossy())
+                );
+                if crate::ui::interactive() {
+                    if !crate::ui::prompt::confirm("reinstall / overwrite it?", false)? {
+                        println!("  {} skipped", style.dim("ok"));
+                        return Ok(true);
+                    }
+                } else {
+                    return Ok(true);
+                }
+            }
+
             // Suspicious-package gate: analyze first (cheap, metadata only),
             // ask to investigate when anything looks off.
             let meta = crate::apps::npm_meta(&app.client, package).await;
@@ -400,10 +426,12 @@ async fn try_app_install(app: &App, spec: &str) -> PxResult<bool> {
         }
     }
 
-    let pb = spinner::one(&format!("installing {spec}…"));
-    match crate::apps::install(app, &install, app.cli.dry_run).await {
+    // No live spinner here: npm and installer scripts inherit stdio and
+    // print their own output — a spinner next to them garbles the terminal.
+    println!("  {} installing {spec}…", style.dim("→"));
+    match crate::apps::install(app, &install, app.cli.dry_run, false).await {
         Ok(()) => {
-            spinner::finish_ok(&pb, format!("installed {spec}"));
+            println!("  {} installed {}", style.ok("✔"), spec);
             if !app.cli.dry_run {
                 let mut ledger = Ledger::load();
                 ledger.record(spec, "app");
@@ -412,8 +440,28 @@ async fn try_app_install(app: &App, spec: &str) -> PxResult<bool> {
             Ok(true)
         }
         Err(e) => {
-            spinner::finish_err(&pb, format!("{spec} install failed"));
-            Err(e)
+            // npm EEXIST: a previous install left the binary in place —
+            // offer the --force overwrite instead of a dead end.
+            let msg = format!("{e}");
+            if msg.contains("EEXIST") {
+                println!(
+                    "  {} {spec} binary already exists — npm refuses to overwrite",
+                    style.warn("⚠")
+                );
+                if crate::ui::interactive()
+                    && crate::ui::prompt::confirm("force-overwrite with npm --force?", false)?
+                {
+                    crate::apps::install(app, &install, app.cli.dry_run, true).await?;
+                    println!("  {} installed {} (forced)", style.ok("✔"), spec);
+                    if !app.cli.dry_run {
+                        let mut ledger = Ledger::load();
+                        ledger.record(spec, "app");
+                        ledger.save();
+                    }
+                    return Ok(true);
+                }
+            }
+            Err(PxError::User(format!("{spec} install failed: {e}")))
         }
     }
 }

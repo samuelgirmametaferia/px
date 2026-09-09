@@ -143,10 +143,16 @@ impl Executor for RealExecutor {
 
         if opts.inherit {
             crate::ui::prompt::flush();
+            // The child owns the terminal now — hide any live bar so output
+            // never interleaves with our drawing (that's how terminals get
+            // cooked), then restore it when the child is done.
+            crate::ui::progress::hide_active();
             let status = cmd.status().await.map_err(|e| PxError::Command {
                 cmd: resolved.join(" "),
                 stderr: e.to_string(),
-            })?;
+            });
+            crate::ui::progress::show_active();
+            let status = status?;
             Ok(ExecOutput {
                 status: status.code().unwrap_or(-1),
                 stdout: String::new(),

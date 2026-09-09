@@ -155,7 +155,15 @@ pub async fn run(app: App) -> PxResult<()> {
     }
 
     let pb = crate::ui::spinner::one(&format!("removing {}…", chosen.join(", ")));
-    match crate::maintenance::uninstall(&app.exec, app.recipe(), &chosen, app.cli.dry_run).await {
+    match crate::maintenance::uninstall(
+        &app.exec,
+        app.recipe(),
+        &chosen,
+        app.cli.dry_run,
+        app.cli.verbose > 0,
+    )
+    .await
+    {
         Ok(()) => {
             spinner::finish_ok(
                 &pb,

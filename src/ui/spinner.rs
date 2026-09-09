@@ -40,9 +40,13 @@ impl Spinners {
     }
 }
 
-/// A single indeterminate spinner for one long task.
+/// A single indeterminate spinner for one long task. All spinners share one
+/// MultiProgress so sequential/parallel spinners stack on separate lines
+/// instead of painting over each other.
 pub fn one(label: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
+    static MULTI: std::sync::OnceLock<MultiProgress> = std::sync::OnceLock::new();
+    let multi = MULTI.get_or_init(MultiProgress::new);
+    let pb = multi.add(ProgressBar::new_spinner());
     pb.set_style(
         ProgressStyle::with_template("{spinner:.magenta} {msg}")
             .unwrap_or_else(|_| ProgressStyle::default_spinner())

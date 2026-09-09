@@ -2,9 +2,17 @@
 //! Runs once after install (tracked in px's state dir), only on a tty.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const FRAMES: usize = 36;
+
+/// Set once play() has run this process — commands skip their own banner.
+static PLAYED: AtomicBool = AtomicBool::new(false);
+
+pub fn played_this_run() -> bool {
+    PLAYED.load(Ordering::Relaxed)
+}
 
 pub fn state_marker() -> std::path::PathBuf {
     crate::state::state_dir().join("welcomed")

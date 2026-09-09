@@ -37,7 +37,7 @@ parse = "pacman_info"
 argv = ["pacman", "-Q", "{pkg}"]
 
 [sources.install]
-argv = ["sudo", "pacman", "-S", "--needed", "{pkgs...}"]
+argv = ["sudo", "pacman", "-S", "--needed", "--noconfirm", "{pkgs...}"]
 elevated = true
 
 [sources.provides]
@@ -107,7 +107,7 @@ tools = ["ruby"]
 runtime_deps = ["base-devel"]   # native gem extensions
 
 [maintenance.uninstall]
-argv = ["sudo", "pacman", "-Rs", "{pkgs...}"]
+argv = ["sudo", "pacman", "-Rs", "--noconfirm", "{pkgs...}"]
 elevated = true
 
 [maintenance.updates]

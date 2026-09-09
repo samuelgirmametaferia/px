@@ -93,9 +93,10 @@ pub fn read_lock() -> Option<LockInfo> {
 pub fn release_lock() {
     // Only remove if it's ours.
     if let Some(lock) = read_lock()
-        && lock.pid == std::process::id() {
-            let _ = std::fs::remove_file(lock_path());
-        }
+        && lock.pid == std::process::id()
+    {
+        let _ = std::fs::remove_file(lock_path());
+    }
 }
 
 // ---------------------------------------------------------------- journal

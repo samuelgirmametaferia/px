@@ -70,9 +70,9 @@ pub fn purge_expired(max_age: Duration) {
                     .duration_since(modified)
                     .map(|age| age > max_age)
                     .unwrap_or(false)
-                {
-                    let _ = std::fs::remove_file(entry.path());
-                }
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
 }

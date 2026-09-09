@@ -28,6 +28,8 @@ pub struct PackageHit {
 pub struct InstallCtx {
     pub assume_yes: bool,
     pub dry_run: bool,
+    /// -v: let the package manager's output stream through untouched.
+    pub verbose: bool,
 }
 
 /// Search side of a source.

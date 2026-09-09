@@ -143,15 +143,16 @@ impl App {
             .map(|c| format!("{c:?}"))
             .unwrap_or_else(|| "interactive".into());
         if let Some(prev) = crate::state::acquire_lock(&cmd_label)
-            && prev.pid != std::process::id() {
-                eprintln!(
+            && prev.pid != std::process::id()
+        {
+            eprintln!(
                     "{}",
                     self.style.warn(&format!(
                         "another px is already running (pid {}, {}) — proceeding; your package manager will serialize if needed",
                         prev.pid, prev.command
                     ))
                 );
-            }
+        }
 
         let result = self.run_inner().await;
         crate::state::release_lock();

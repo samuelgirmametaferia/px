@@ -93,7 +93,7 @@ pub async fn run(app: App, path: &str) -> PxResult<()> {
 
     let width = plan_lines
         .iter()
-        .map(|l| l.len())
+        .map(|l| crate::ui::table::visible_len(l))
         .max()
         .unwrap_or(30)
         .min(90);
@@ -191,6 +191,7 @@ pub async fn run(app: App, path: &str) -> PxResult<()> {
                 let ctx = crate::backend::InstallCtx {
                     assume_yes: true,
                     dry_run: true,
+                    verbose: app.cli.verbose > 0,
                 };
                 match installers[0].install(std::slice::from_ref(pkg), ctx).await {
                     Ok(()) => installed.push(pkg.clone()),
@@ -206,6 +207,7 @@ pub async fn run(app: App, path: &str) -> PxResult<()> {
                 let ctx = crate::backend::InstallCtx {
                     assume_yes: app.cli.yes,
                     dry_run: app.cli.dry_run,
+                    verbose: app.cli.verbose > 0,
                 };
                 match installers[i].install(std::slice::from_ref(pkg), ctx).await {
                     Ok(()) => {

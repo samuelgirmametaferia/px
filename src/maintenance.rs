@@ -147,6 +147,7 @@ pub async fn uninstall(
     recipe: &Recipe,
     pkgs: &[String],
     dry_run: bool,
+    verbose: bool,
 ) -> PxResult<()> {
     let Some(def) = &recipe.maintenance.uninstall else {
         return Err(PxError::User(
@@ -158,24 +159,30 @@ pub async fn uninstall(
     }
     let pkg = pkgs.first().cloned().unwrap_or_default();
     let argv = expand_argv(&def.argv, &pkg, pkgs, None, None);
+    // Captured and quiet by default (-v streams it through).
     let out = exec
         .run(
             &argv,
             RunOpts {
-                inherit: true,
+                inherit: verbose,
                 dry_run,
                 ..Default::default()
             },
         )
         .await?;
     if !out.success() {
+        let combined = format!("{}{}", out.stdout, out.stderr);
+        if !combined.trim().is_empty() {
+            let lines: Vec<&str> = combined.lines().collect();
+            let start = lines.len().saturating_sub(25);
+            eprintln!("  ── last lines of: {} ──", argv.join(" "));
+            for line in &lines[start..] {
+                eprintln!("  {line}");
+            }
+        }
         return Err(PxError::Command {
             cmd: argv.join(" "),
-            stderr: if out.stderr.is_empty() {
-                "(see output above)".into()
-            } else {
-                out.stderr
-            },
+            stderr: "(see output above)".into(),
         });
     }
     // The "installed" cache answers are now wrong.

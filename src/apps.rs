@@ -71,12 +71,17 @@ fn build_install(def: &AppDef) -> Option<AppInstall> {
     }
 }
 
-/// Execute an app install. `confirmed` = the user already said yes at the
-/// plan level; script installs still show their pipe command verbatim.
-pub async fn install(_app: &App, install: &AppInstall, dry_run: bool) -> PxResult<()> {
+/// Execute an app install. `force` adds npm's `--force` (used when a
+/// previous install left the binary in place and the user chose to
+/// overwrite). Script installs show their pipe command verbatim.
+pub async fn install(_app: &App, install: &AppInstall, dry_run: bool, force: bool) -> PxResult<()> {
     match install {
         AppInstall::Npm { package, .. } => {
-            let argv = ["npm", "install", "-g", package.as_str()];
+            let mut argv: Vec<&str> = vec!["npm", "install", "-g"];
+            if force {
+                argv.push("--force");
+            }
+            argv.push(package);
             run(&argv, dry_run).await
         }
         AppInstall::Script { url, .. } => {

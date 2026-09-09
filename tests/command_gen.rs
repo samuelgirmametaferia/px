@@ -34,6 +34,7 @@ fn run_install(recipe_text: &str, pkgs: &[&str]) -> Vec<Vec<String>> {
 fn arch_install_generates_pacman_argv() {
     let calls = run_install(px::recipe::load::bundled::ARCH, &["ripgrep", "sl"]);
     assert_eq!(calls.len(), 1);
+    // --noconfirm: px already confirmed the plan, pacman stays quiet
     assert_eq!(
         calls[0],
         vec![
@@ -41,6 +42,7 @@ fn arch_install_generates_pacman_argv() {
             "pacman".to_string(),
             "-S".to_string(),
             "--needed".to_string(),
+            "--noconfirm".to_string(),
             "ripgrep".to_string(),
             "sl".to_string(),
         ]

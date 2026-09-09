@@ -334,9 +334,11 @@ impl ShellDetector {
         // Extensionless executable with a sh shebang.
         if ext.is_empty()
             && let Some(line) = first_line(file)
-                && line.starts_with("#!") && (line.contains("/sh") || line.contains("bash")) {
-                    return true;
-                }
+            && line.starts_with("#!")
+            && (line.contains("/sh") || line.contains("bash"))
+        {
+            return true;
+        }
         false
     }
 }

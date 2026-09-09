@@ -23,19 +23,44 @@ pub fn hits_table(style: &crate::ui::style::Style, hits: &[PackageHit]) -> Table
     table
 }
 
+/// Visible length of a string (ANSI escape sequences count as zero).
+pub fn visible_len(s: &str) -> usize {
+    let mut len = 0usize;
+    let mut in_esc = false;
+    for c in s.chars() {
+        if in_esc {
+            if c == 'm' {
+                in_esc = false;
+            }
+            continue;
+        }
+        if c == '\x1b' {
+            in_esc = true;
+            continue;
+        }
+        len += 1;
+    }
+    len
+}
+
+/// Pad a (possibly styled) string with spaces to a visible width.
+fn pad_to(line: &str, width: usize) -> String {
+    let pad = width.saturating_sub(visible_len(line));
+    format!("{line}{}", " ".repeat(pad))
+}
+
 /// Box-drawing panel: a titled section used in install plans.
-///   ╭─ Packages to install ─────────────╮
+///   ╭─ install plan ────────────────────╮
 ///   │ ripgrep 14.1.0           (repo)   │
 ///   ╰───────────────────────────────────╯
+/// Widths are measured by VISIBLE length so styled lines stay aligned.
 pub fn panel(title: &str, lines: &[String], width: usize) -> String {
-    let w = width.max(title.len() + 4).max(20);
+    let w = width.max(visible_len(title) + 4).max(20);
     let mut out = String::new();
     let title_seg = format!("─ {title} ");
     out.push_str(&format!("╭{title_seg:<width$}╮\n", width = w + 1));
     for line in lines {
-        // Truncate over-long lines (ANSI codes make measuring unreliable, so
-        // we just cap content length before styling at call sites).
-        out.push_str(&format!("│ {line:<width$} │\n", width = w - 1));
+        out.push_str(&format!("│ {} │\n", pad_to(line, w - 1)));
     }
     out.push_str(&format!("╰{:-<width$}╯\n", "", width = w + 1));
     out.pop(); // trailing newline

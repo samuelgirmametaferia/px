@@ -66,8 +66,13 @@ impl Style {
         }
     }
 
-    /// The px banner. Multicolor, as promised.
+    /// The px banner. Multicolor, as promised. When the first-run spectrum
+    /// animation already showed the wordmark this run, stay quiet — one
+    /// banner per invocation, not two.
     pub fn banner(&self) -> String {
+        if crate::ui::spectrum::played_this_run() {
+            return String::new();
+        }
         if !self.on {
             return "px".into();
         }

@@ -106,9 +106,10 @@ impl Provider for SourceProvider {
         let key = format!("installed:{}:{}", self.src.def.id, name);
         if let Some(cached) =
             crate::cache::get("provider", &key, std::time::Duration::from_secs(300))
-            && let Ok(v) = cached.parse::<bool>() {
-                return Ok(v);
-            }
+            && let Ok(v) = cached.parse::<bool>()
+        {
+            return Ok(v);
+        }
         let argv = expand_argv(&def.argv, name, &[name.to_string()], self.helper(), None);
         let out = self.exec.run(&argv, RunOpts::default()).await?;
         let installed = out.success();
@@ -126,32 +127,50 @@ impl Installer for SourceProvider {
                 self.src.def.id
             )));
         };
+        // sudo credentials are cached by the preflight, so the install
+        // command itself doesn't need the terminal.
         if def.elevated && !ctx.dry_run {
             crate::backend::elevate::preflight().await?;
         }
         let pkg = pkgs.first().cloned().unwrap_or_default();
         let argv = expand_argv(&def.argv, &pkg, pkgs, self.helper(), None);
+        // px owns the display: package-manager output is captured (quiet),
+        // except with -v where it streams through untouched.
         let out = self
             .exec
             .run(
                 &argv,
                 RunOpts {
-                    inherit: true,
+                    inherit: ctx.verbose,
                     dry_run: ctx.dry_run,
                     ..Default::default()
                 },
             )
             .await?;
         if !out.success() {
+            // Failure: surface what the package manager actually said —
+            // the last lines carry the real error.
+            print_output_tail(&argv.join(" "), &out);
             return Err(PxError::Command {
                 cmd: argv.join(" "),
-                stderr: if out.stderr.is_empty() {
-                    "(see output above)".into()
-                } else {
-                    out.stderr
-                },
+                stderr: "(see output above)".into(),
             });
         }
         Ok(())
+    }
+}
+
+/// Show the tail of a failed command's output (stdout+stderr interleaved,
+/// last 25 lines) — enough to see the real error without the flood.
+fn print_output_tail(cmd: &str, out: &crate::exec::ExecOutput) {
+    let combined = format!("{}{}", out.stdout, out.stderr);
+    if combined.trim().is_empty() {
+        return;
+    }
+    let lines: Vec<&str> = combined.lines().collect();
+    let start = lines.len().saturating_sub(25);
+    eprintln!("  ── last lines of: {cmd} ──");
+    for line in &lines[start..] {
+        eprintln!("  {line}");
     }
 }

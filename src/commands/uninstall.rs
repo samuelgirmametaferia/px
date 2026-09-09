@@ -59,7 +59,12 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
             format!("{}  {}", style.bold(name), style.dim(&size))
         })
         .collect();
-    let width = plan.iter().map(|l| l.len()).max().unwrap_or(30).min(80);
+    let width = plan
+        .iter()
+        .map(|l| crate::ui::table::visible_len(l))
+        .max()
+        .unwrap_or(30)
+        .min(80);
     println!();
     println!("{}", crate::ui::table::panel("remove plan", &plan, width));
     if total > 0 {
@@ -79,7 +84,14 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     }
 
     let pb = crate::ui::spinner::one(&format!("removing {}…", to_remove.join(", ")));
-    match crate::maintenance::uninstall(&app.exec, app.recipe(), &to_remove, app.cli.dry_run).await
+    match crate::maintenance::uninstall(
+        &app.exec,
+        app.recipe(),
+        &to_remove,
+        app.cli.dry_run,
+        app.cli.verbose > 0,
+    )
+    .await
     {
         Ok(()) => {
             spinner::finish_ok(&pb, format!("removed {}", to_remove.join(", ")));

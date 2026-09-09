@@ -10,7 +10,7 @@ license = "MIT"
 clap = { version = "4.5", features = ["derive", "wrap_help", "suggestions"] }
 
 # Async
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
 async-trait = "0.1"
 

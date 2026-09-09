@@ -81,11 +81,11 @@ pub fn analyze_npm(meta: &NpmMeta) -> Vec<Suspicion> {
             .filter(|(sim, _)| *sim >= 0.88)
             .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(_, p)| p)
-        {
-            flags.push(Suspicion {
-                reason: format!("name is suspiciously close to the popular package '{popular}'"),
-            });
-        }
+    {
+        flags.push(Suspicion {
+            reason: format!("name is suspiciously close to the popular package '{popular}'"),
+        });
+    }
 
     // One maintainer is fine for a hobby lib, worth seeing in a report.
     if meta.maintainers.len() == 1 {
@@ -101,11 +101,12 @@ pub fn analyze_npm(meta: &NpmMeta) -> Vec<Suspicion> {
         });
     }
     if let Some(size) = meta.unpacked_size
-        && size < 4 * 1024 {
-            flags.push(Suspicion {
-                reason: "suspiciously small package (< 4 KiB)".into(),
-            });
-        }
+        && size < 4 * 1024
+    {
+        flags.push(Suspicion {
+            reason: "suspiciously small package (< 4 KiB)".into(),
+        });
+    }
 
     flags
 }

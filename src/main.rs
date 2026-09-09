@@ -84,6 +84,27 @@ fn main() {
         .build()
         .expect("tokio runtime");
 
+    // Ctrl+C / Ctrl+\ / kill: exit promptly with the terminal left clean —
+    // clear live bars, drop the instance lock, then die. The install
+    // journal deliberately survives so the next run can offer to resume.
+    runtime.spawn(async move {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigint = signal(SignalKind::interrupt()).expect("sigint handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("sigterm handler");
+        let mut sigquit = signal(SignalKind::quit()).expect("sigquit handler");
+        tokio::select! {
+            _ = sigint.recv() => {}
+            _ = sigterm.recv() => {}
+            _ = sigquit.recv() => {}
+        }
+        px::ui::progress::clear_all();
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        px::state::release_lock();
+        eprintln!();
+        std::process::exit(130);
+    });
+
     let code = runtime.block_on(async {
         let app = match px::app::App::init(cli).await {
             Ok(app) => app,
