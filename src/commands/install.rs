@@ -231,7 +231,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
 
     // Download sizes for a REAL percentage: package metadata knows the
     // bytes; the network-flow monitor (netmon) watches /proc/net/dev while
-    // the package manager runs. No output parsing, no guessing.
+    // the package manager runs. No output parsing, no guessing. AUR builds
+    // report no size — there the monitor still runs, open-ended, so the
+    // byte counter visibly climbs during the download.
     let mut info_handles = Vec::new();
     for hit in &to_install {
         let provs: Vec<Arc<dyn Provider>> = providers.clone();
@@ -262,17 +264,21 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
             ),
         )
     } else {
-        let total_steps: usize = by_source.iter().map(|(_, p)| p.len()).sum();
-        crate::ui::progress::install_bar(bar_style, total_steps.max(1), &crate::ui::jokes::next())
+        crate::ui::progress::flow_bar(bar_style, "installing (size unknown — watching the wire)")
     };
 
     // Watch the interface counters for the whole install; aborted after.
-    let monitor = if total_bytes > 0 {
-        crate::netmon::total_rx_bytes()
-            .map(|baseline| crate::netmon::spawn_monitor(bar.clone(), total_bytes, baseline))
-    } else {
-        None
-    };
+    let monitor = crate::netmon::total_rx_bytes().map(|baseline| {
+        crate::netmon::spawn_monitor(
+            bar.clone(),
+            if total_bytes > 0 {
+                Some(total_bytes)
+            } else {
+                None
+            },
+            baseline,
+        )
+    });
 
     let mut ledger = Ledger::load();
     let mut failures = Vec::new();
@@ -300,9 +306,6 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                                 );
                                 crate::state::journal_step(&mut journal, p);
                             }
-                        }
-                        if total_bytes == 0 {
-                            bar.inc(pkgs.len() as u64);
                         }
                     }
                     Err(e) => {
@@ -633,12 +636,7 @@ async fn try_source_build(app: &App, spec: &str) -> PxResult<()> {
     spinner::finish_ok(&pb, format!("builds with {}", strategy.label()));
 
     let pb = spinner::one(&format!("building {}…", repo.full_name));
-    match crate::github::build_and_install(
-        repo,
-        &strategy,
-        false,
-        crate::sandbox::enabled(app),
-    )
+    match crate::github::build_and_install(repo, &strategy, false, crate::sandbox::enabled(app))
         .await
     {
         Ok(()) => {

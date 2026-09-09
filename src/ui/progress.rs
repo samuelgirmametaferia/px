@@ -85,6 +85,35 @@ pub fn bytes_bar(style: BarStyle, total_bytes: u64, label: &str) -> ProgressBar 
     pb
 }
 
+/// An open-ended flow bar for installs whose download size is unknowable
+/// (AUR source builds): no percentage, but the live byte counter climbs as
+/// the package manager downloads — the bar never looks dead.
+pub fn flow_bar(style: BarStyle, label: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    let template = match style {
+        BarStyle::Blocks => "{spinner:.green} {msg} ↓ {bytes} {elapsed}",
+        BarStyle::Shades => "{spinner:.green} {msg} ↓ {bytes} {elapsed}",
+        BarStyle::Rainbow => "{spinner:.green} {msg} ↓ {bytes} {elapsed} ✨",
+        BarStyle::Minimal => "{msg} ↓ {bytes} {elapsed}",
+        BarStyle::Sparkles => "{spinner:.magenta} {msg} ↓ {bytes} {elapsed} 🚀",
+    };
+    pb.set_style(
+        ProgressStyle::with_template(template)
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
+            .tick_chars(match style {
+                BarStyle::Blocks => "█▉▊▋▌▍▎▏░",
+                BarStyle::Shades => "█▓▒░·",
+                BarStyle::Rainbow => "█▓▒░ ",
+                BarStyle::Minimal => "=-",
+                BarStyle::Sparkles => "━─",
+            }),
+    );
+    pb.set_message(label.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(500));
+    set_active(&pb);
+    pb
+}
+
 // ------------------------------------------------------- live-bar hiding
 //
 // Children with inherited stdio (sudo prompts, pacman/npm output) must not

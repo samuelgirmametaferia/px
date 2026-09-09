@@ -32,18 +32,23 @@ pub fn total_rx_bytes() -> Option<u64> {
 /// estimate — small, deliberate, per the design.
 const NOISE_FLOOR_BPS: u64 = 4 * 1024;
 
-/// Watch network RX while an install runs and drive a progress bar towards
-/// `total_bytes`. Returns a handle; call `.abort()` when the install ends.
-/// The bar is clamped so ambient downloads can never fake 100% early...
-/// they can only make it reach the end slightly sooner.
+/// Watch network RX while an install runs and drive a progress bar.
+/// - `Some(total)`: position = credited bytes, clamped at the known total
+///   → a real percentage.
+/// - `None`: total unknown (AUR builds report no download size) → position
+///   is an open-ended byte counter, so the bar visibly climbs during the
+///   download instead of freezing until completion.
+/// Ambient traffic is discounted by the noise floor either way.
+/// Returns a handle; call `.abort()` when the install ends.
 pub fn spawn_monitor(
     bar: indicatif::ProgressBar,
-    total_bytes: u64,
+    total_bytes: Option<u64>,
     baseline_rx: u64,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last = baseline_rx;
         let mut credited: u64 = 0;
+        let total = total_bytes.unwrap_or(u64::MAX);
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
             let Some(now) = total_rx_bytes() else {
@@ -55,9 +60,9 @@ pub fn spawn_monitor(
             let window = Duration::from_millis(300).as_secs_f64();
             let noise = (NOISE_FLOOR_BPS as f64 * window) as u64;
             let real = delta.saturating_sub(noise);
-            credited = (credited + real).min(total_bytes);
+            credited = (credited + real).min(total);
             bar.set_position(credited);
-            if credited >= total_bytes {
+            if total_bytes.is_some() && credited >= total {
                 break;
             }
         }

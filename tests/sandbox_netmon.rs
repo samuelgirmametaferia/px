@@ -62,7 +62,7 @@ fn netmon_monitor_advances_on_traffic() {
             None => return,
         };
         let bar = indicatif::ProgressBar::new(512 * 1024);
-        let monitor = px::netmon::spawn_monitor(bar.clone(), 512 * 1024, baseline);
+        let monitor = px::netmon::spawn_monitor(bar.clone(), Some(512 * 1024), baseline);
         // generate some RX (tiny request); ignore failure when offline
         let _ = reqwest::Client::new()
             .get("https://registry.npmjs.org/express")
