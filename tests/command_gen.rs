@@ -124,8 +124,10 @@ fn aur_search_uses_helper() {
         let aur = active.iter().find(|s| s.def.id == "aur").unwrap();
         assert!(!aur.helper.is_empty());
     }
-    // repo is always active where pacman exists.
-    assert!(active.iter().any(|s| s.def.id == "repo"));
+    // repo is active wherever pacman exists (not on CI's ubuntu runners).
+    if which::which("pacman").is_ok() {
+        assert!(active.iter().any(|s| s.def.id == "repo"));
+    }
     let _ = inactive;
 }
 
