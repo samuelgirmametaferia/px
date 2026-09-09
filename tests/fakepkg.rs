@@ -281,15 +281,20 @@ fn release_asset_selection() {
 #[test]
 fn unavailable_methods_are_filtered() {
     use px::universal::*;
+    // a tool that exists NOWHERE (ci runners have ruby/gem preinstalled,
+    // so a real tool name would be environment-dependent)
+    let absent = "px-definitely-not-a-real-tool-9f3a";
     let candidates = vec![
         Candidate {
-            method: Method::Gem { gem: "x".into() },
+            method: Method::Brew { tap: "x/t".into() },
             confidence: 100,
             note: String::new(),
             pinned_sha: None,
         },
         Candidate {
-            method: Method::Brew { tap: "x/t".into() },
+            method: Method::Pipx {
+                package: absent.into(),
+            },
             confidence: 100,
             note: String::new(),
             pinned_sha: None,
@@ -304,9 +309,13 @@ fn unavailable_methods_are_filtered() {
         },
     ];
     let ranked = rank_candidates(candidates);
-    // gem/brew aren't installed on this machine → only cargo survives
-    assert_eq!(ranked.len(), 1, "missing-tool methods must be filtered");
-    assert!(matches!(ranked[0].method, Method::Cargo { .. }));
+    assert!(
+        ranked
+            .iter()
+            .all(|c| !matches!(c.method, Method::Brew { .. } | Method::Pipx { .. })),
+        "missing-tool methods must be filtered"
+    );
+    assert!(ranked.iter().any(|c| matches!(c.method, Method::Cargo { .. })));
 
     // ranking: method rank dominates confidence
     let ranked = rank_candidates(vec![
