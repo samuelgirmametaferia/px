@@ -261,13 +261,27 @@ pub async fn package_files(
 
 /// The standard executable directories (bin-dirs) a package's commands
 /// can land in.
-const BIN_DIRS: &[&str] = &["/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/opt"];
+/// A file is a command if it sits DIRECTLY in a bin dir, or exactly at
+/// /opt/<vendor>/bin/<file> — segment arithmetic, airtight where prefix
+/// matching over-matched metasploit's 24k vendored files.
+fn in_bin_dir(path: &str) -> bool {
+    let mut segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let _file = match segs.pop() {
+        Some(f) if !f.is_empty() => f,
+        _ => return false,
+    };
+    match segs.as_slice() {
+        ["usr", "bin"] | ["usr", "local", "bin"] | ["bin"] | ["usr", "sbin"] => true,
+        ["opt", vendor, "bin"] if !vendor.is_empty() => true,
+        _ => false,
+    }
+}
 
 /// Extract command-like paths (executables in bin dirs) from a file list.
 pub fn commands_from_files(files: &[String]) -> Vec<String> {
     files
         .iter()
-        .filter(|f| BIN_DIRS.iter().any(|d| f.starts_with(d)))
+        .filter(|f| in_bin_dir(f))
         .filter(|f| !f.ends_with('/'))
         .cloned()
         .collect()

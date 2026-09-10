@@ -138,11 +138,18 @@ impl Installer for SourceProvider {
             )));
         };
         // sudo credentials are cached by the preflight, so the install
-        // command itself shouldn't need the terminal — EXCEPT AUR helpers
-        // (yay/paru): they invoke sudo again mid-build (package install
-        // step), and without a tty that sudo dies reading the password
-        // ("sudo: timed out reading password"). Helpers always inherit.
-        let is_helper_source = self.helper().is_some();
+        // command itself shouldn't need the terminal — EXCEPT AUR-style
+        // helpers (yay/paru): they invoke sudo again mid-build, and
+        // without a tty that sudo dies ("timed out reading password").
+        // NOT "has a helper" — every source's require_any match becomes
+        // one (pacman too, which made ALL installs noisy). The argv shape
+        // is the truth: a helper that IS argv[0] owns its own stdio; a
+        // package manager behind a sudo prefix stays captured and quiet.
+        let is_helper_source = def
+            .argv
+            .first()
+            .map(|first| Some(first.as_str()) == self.helper())
+            .unwrap_or(false);
         if def.elevated && !ctx.dry_run {
             crate::backend::elevate::preflight().await?;
         }

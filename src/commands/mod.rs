@@ -6,6 +6,7 @@ pub mod info;
 pub mod install;
 pub mod install_for;
 pub mod list;
+pub mod path;
 pub mod recipe;
 pub mod search;
 pub mod status;

@@ -207,6 +207,7 @@ impl App {
             Command::Completions { shell } => commands::completions::run(self, &shell),
             Command::Candidates => commands::candidates::run(self).await,
             Command::Update => commands::update::run(self).await,
+            Command::Path { name } => commands::path::run(self, &name).await,
             Command::Suggest => commands::suggest::run(self).await,
             Command::Status => commands::status::run(self).await,
             Command::Search { term } => commands::search::run(self, &term.join(" ")).await,

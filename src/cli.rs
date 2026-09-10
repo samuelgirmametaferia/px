@@ -106,6 +106,9 @@ pub enum Command {
     /// Update px itself from GitHub releases (also refreshes recipes).
     Update,
 
+    /// Find where a package's binaries live (and what commands it provides).
+    Path { name: String },
+
     /// Find unused/unneeded packages and offer to remove them (free space).
     Suggest,
 

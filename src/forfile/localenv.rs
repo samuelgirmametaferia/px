@@ -47,6 +47,12 @@ async fn python_venv(root: &Path, deps: &[String], dry_run: bool) -> PxResult<()
 }
 
 async fn npm_install(root: &Path, dry_run: bool) -> PxResult<()> {
+    // npm install without a package.json is an ENOENT error — loose .js
+    // files have nothing for npm to resolve; only bootstrap a real project
+    if !root.join("package.json").exists() {
+        println!("  · no package.json — nothing for npm to install");
+        return Ok(());
+    }
     run(&["npm", "install"], root, dry_run).await
 }
 
@@ -59,6 +65,15 @@ async fn bundle(root: &Path, dry_run: bool) -> PxResult<()> {
 }
 
 async fn run(argv: &[&str], cwd: &Path, dry_run: bool) -> PxResult<()> {
+    // a missing tool is a confusing ENOENT spawn error — check first and
+    // tell the user which tool to install (with the px command to get it)
+    if let Some(bin) = argv.first()
+        && which::which(bin).is_err()
+    {
+        return Err(crate::error::PxError::User(format!(
+            "'{bin}' is not installed — get it with: px install {bin}",
+        )));
+    }
     let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
     if dry_run {
         println!("[dry-run] (cwd {}) {}", cwd.display(), argv.join(" "));

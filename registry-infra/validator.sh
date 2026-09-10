@@ -3,9 +3,12 @@
 # container with dropped capabilities, no host mounts, a temporary HOME,
 # resource limits and a timeout — then diffs the filesystem and tests the
 # expected binary. Emits a validation receipt (never "safe", only "tested").
-#   usage: validator.sh <record.json>
+#   usage: validator.sh <record.json> <receipt-out.json>
+#   diagnostics go to stderr; the receipt is written to the given path —
+#   never through stdout (stray output once corrupted a slurped receipt).
 set -euo pipefail
 RECORD="$1"
+RECEIPT_OUT="${2:-}"
 URL=$(jq -r '.install_methods[0].url' "$RECORD")
 BIN=$(jq -r '.expected_binaries[0]' "$RECORD")
 WORK=$(mktemp -d)
@@ -63,4 +66,8 @@ jq -n \
     discovered_binaries: $bins,
     tests: ["exit_zero", "binary_exists", "binary_executable", "version_runs"],
     result: "pass"}' > "$WORK/receipt.json"
-cat "$WORK/receipt.json"
+if [ -n "$RECEIPT_OUT" ]; then
+  cp "$WORK/receipt.json" "$RECEIPT_OUT"
+else
+  cat "$WORK/receipt.json"
+fi

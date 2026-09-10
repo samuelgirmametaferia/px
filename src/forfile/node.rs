@@ -56,10 +56,13 @@ impl Detector for NodeDetector {
 
         // No package.json? Scan imports for evidence of usage but keep it
         // light — without a manifest we can't know versions, so we only
-        // treat named imports as local deps.
+        // treat named imports as local deps. Minified/bundled files are
+        // skipped: their regex-matched "imports" are code fragments, not
+        // dependencies (the scores_mfe.js garbage: "),L,," and friends).
         if deps.is_empty() {
             let import_re =
-                regex::Regex::new(r#"(?:require\(|from\s+|import\s+)['"]([^'"]+)['"]"#).unwrap();
+                regex::Regex::new(r#"(?:require\s*\(|from\s+|import\s+)\s*['"]([^'"]+)['"]"#)
+                    .unwrap();
             for file in files {
                 if !matches!(
                     extension(file).as_str(),
@@ -70,19 +73,21 @@ impl Detector for NodeDetector {
                 let Ok(text) = std::fs::read_to_string(file) else {
                     continue;
                 };
+                if looks_minified(&text) {
+                    tracing::debug!("skipping minified/bundled file: {}", file_name(file));
+                    continue;
+                }
                 for caps in import_re.captures_iter(&text) {
                     if let Some(m) = caps.get(1) {
                         let spec = m.as_str();
-                        // Only bare module names (not ./relative, not node: builtins).
-                        if !spec.starts_with('.')
-                            && !spec.starts_with('/')
-                            && !spec.starts_with("node:")
-                            && !spec.starts_with('@')
-                        {
-                            let name = spec.split('/').next().unwrap_or(spec);
-                            if !deps.contains(&name.to_string()) {
-                                deps.push(name.to_string());
-                            }
+                        // only bare module names: no relative, absolute,
+                        // builtin, or code-fragment garbage
+                        if !is_bare_module_name(spec) {
+                            continue;
+                        }
+                        let name = spec.split('/').next().unwrap_or(spec);
+                        if !deps.contains(&name.to_string()) {
+                            deps.push(name.to_string());
                         }
                     }
                 }
@@ -120,4 +125,38 @@ impl Detector for NodeDetector {
 
         Ok(detected)
     }
+}
+
+/// Minified/bundled JS: long lines, few newlines, huge files. Import
+/// scanning them yields code fragments, not dependencies.
+fn looks_minified(text: &str) -> bool {
+    // > 100KB with an average line > 500 chars is unambiguously built output
+    let lines = text.lines().count().max(1);
+    let avg_line = text.len() / lines;
+    (text.len() > 100_000 && avg_line > 500)
+        // or the first line alone is enormous (single-line bundles)
+        || text.lines().next().is_some_and(|l| l.len() > 5_000)
+}
+
+/// A bare npm module name: optional @scope, then name — letters, digits,
+/// `.`, `_`, `-`, `/` only. Rejects relative paths, node: builtins, and
+/// minified code fragments (parens, commas, $, createElement, ...).
+fn is_bare_module_name(spec: &str) -> bool {
+    if spec.is_empty()
+        || spec.starts_with('.')
+        || spec.starts_with('/')
+        || spec.starts_with("node:")
+        || spec.starts_with("http")
+    {
+        return false;
+    }
+    // @scope/name or name — nothing else
+    let pattern = if spec.starts_with('@') {
+        r"^@?[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    } else {
+        r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    };
+    regex::Regex::new(pattern)
+        .map(|re| re.is_match(spec))
+        .unwrap_or(false)
 }

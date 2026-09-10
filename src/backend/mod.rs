@@ -75,6 +75,23 @@ pub fn activate_sources(defs: &[SourceDef]) -> (Vec<ActiveSource>, Vec<String>) 
     activate_sources_opt(defs, false)
 }
 
+/// Recommend installing the tools behind inactive sources (paru/yay for
+/// the AUR) — px suggesting what IT needs, with the command to get it.
+pub fn missing_source_recommendations(defs: &[SourceDef]) -> Vec<String> {
+    let (_, inactive) = activate_sources_opt(defs, false);
+    inactive
+        .into_iter()
+        .filter_map(|id| {
+            let def = defs.iter().find(|d| d.id == id)?;
+            let first_tool = def.require_any.first()?;
+            Some(format!(
+                "'{first_tool}' would unlock the {} ({} source) — px install {first_tool}",
+                def.label, id
+            ))
+        })
+        .collect()
+}
+
 pub fn activate_sources_opt(defs: &[SourceDef], force: bool) -> (Vec<ActiveSource>, Vec<String>) {
     let mut active = Vec::new();
     let mut inactive = Vec::new();
