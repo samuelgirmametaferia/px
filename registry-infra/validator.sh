@@ -31,14 +31,14 @@ timeout 420 bwrap \
   --setenv HOME /tmp/home \
   --setenv PATH /usr/bin:/bin \
   /bin/sh < "$WORK/installer.sh" > "$WORK/stdout" 2> "$WORK/stderr" || {
-    echo "installer exited non-zero"; tail -5 "$WORK/stderr"; exit 1; }
+    echo "installer exited non-zero"; tail -5 "$WORK/stderr" >&2; exit 1; }
 
 # DIFF the temp home: find NEW executables the installer created, wherever
 # it put them (~/.local/bin, ~/.cargo/bin, ~/bin, ...). The expected-binaries
 # guess from discovery is only a hint — the filesystem is the truth.
 mapfile -t NEWBINS < <(cd "$WORK/home" && find . -type f -executable ! -path "*/.git/*" | sort | comm -13 "$WORK/before.txt" -)
 if [ ${#NEWBINS[@]} -eq 0 ]; then
-  echo "no new executables appeared in the temp HOME"; exit 1
+  echo "no new executables appeared in the temp HOME" >&2; exit 1
 fi
 echo "discovered binaries: ${NEWBINS[*]}"
 BINPATH="$WORK/home/${NEWBINS[0]}"

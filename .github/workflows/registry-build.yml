@@ -41,6 +41,15 @@ jobs:
           # don't ship it, so every candidate was "failing" in ~200ms
           sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
           bwrap --version
+          # ubuntu 24.04 restricts unprivileged user namespaces via AppArmor,
+          # which breaks bwrap entirely ("setting up uid map: Permission
+          # denied"). lift the restriction for this job.
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null | grep -q 1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          # smoke test: if bwrap can't run /bin/true, validation is lying
+          bwrap --ro-bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-ipc --unshare-pid /bin/true \
+            || { echo "bwrap is broken on this runner — validation would fail every candidate" >&2; exit 1; }
           ./scripts/registry-validate.sh todo.jsonl validated.jsonl
 
       # 4. incremental build: only changed shards are rebuilt
