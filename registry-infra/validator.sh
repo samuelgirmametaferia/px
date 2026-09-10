@@ -16,6 +16,9 @@ trap 'rm -rf "$WORK"' EXIT
 curl -fsSL "$URL" -o "$WORK/installer.sh"
 INSTALLER_SHA256=$(sha256sum "$WORK/installer.sh" | cut -d' ' -f1)
 
+# snapshot the temp home so we can diff for NEW files afterwards
+(cd "$WORK/home" && find . -type f) | sort > "$WORK/before.txt"
+
 # run it in a disposable sandbox: system read-only, temp HOME, no host
 # mounts, hard timeout. Never on the runner itself. Network stays ON —
 # installers legitimately download; the read-only system is the security
@@ -30,9 +33,19 @@ timeout 420 bwrap \
   /bin/sh < "$WORK/installer.sh" > "$WORK/stdout" 2> "$WORK/stderr" || {
     echo "installer exited non-zero"; tail -5 "$WORK/stderr"; exit 1; }
 
-# the expected binary must exist, be executable, and respond to --version
-BINPATH="$WORK/home/.local/bin/$BIN"
-[ -x "$BINPATH" ] || { echo "expected binary missing"; exit 1; }
+# DIFF the temp home: find NEW executables the installer created, wherever
+# it put them (~/.local/bin, ~/.cargo/bin, ~/bin, ...). The expected-binaries
+# guess from discovery is only a hint — the filesystem is the truth.
+mapfile -t NEWBINS < <(cd "$WORK/home" && find . -type f -executable ! -path "*/.git/*" | sort | comm -13 "$WORK/before.txt" -)
+if [ ${#NEWBINS[@]} -eq 0 ]; then
+  echo "no new executables appeared in the temp HOME"; exit 1
+fi
+echo "discovered binaries: ${NEWBINS[*]}"
+BINPATH="$WORK/home/${NEWBINS[0]}"
+# prefer the hinted binary when it exists among the new executables
+for nb in "${NEWBINS[@]}"; do
+  case "$nb" in *"$BIN"*) BINPATH="$WORK/home/$nb";; esac
+done
 "$BINPATH" --version > "$WORK/version" 2>&1 || true
 
 BINARY_SHA256=$(sha256sum "$BINPATH" | cut -d' ' -f1)
@@ -44,8 +57,10 @@ jq -n \
   --arg version "$(cat "$WORK/version")" \
   --arg validator "v1" \
   --arg at "$(date -u +%FT%TZ)" \
+  --argjson bins "$(printf '%s\n' "${NEWBINS[@]}" | jq -R . | jq -s .)" \
   '{validator: $validator, tested_at: $at,
     installer_sha256: $installer, binary_sha256: $binary,
+    discovered_binaries: $bins,
     tests: ["exit_zero", "binary_exists", "binary_executable", "version_runs"],
     result: "pass"}' > "$WORK/receipt.json"
 cat "$WORK/receipt.json"

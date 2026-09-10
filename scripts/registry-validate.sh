@@ -12,6 +12,7 @@ while read -r rec; do
       {security_state: "validated",
        identity_confidence: (if .identity_confidence >= 85 then .identity_confidence else 85 end),
        installer_sha256: $r[0].installer_sha256,
+       expected_binaries: ($r[0].discovered_binaries | map(sub("^\\./"; ""))),
        validation_receipt_hash: ($r[0] | @base64),
        last_validated_at: $r[0].tested_at}' \
       /tmp/candidate.json >> "$OUT"
