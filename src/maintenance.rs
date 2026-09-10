@@ -268,7 +268,8 @@ pub fn commands_from_files(files: &[String]) -> Vec<String> {
     files
         .iter()
         .filter(|f| BIN_DIRS.iter().any(|d| f.starts_with(d)))
-        .filter(|f| !f.ends_with('/')).cloned()
+        .filter(|f| !f.ends_with('/'))
+        .cloned()
         .collect()
 }
 

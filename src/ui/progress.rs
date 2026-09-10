@@ -87,6 +87,21 @@ pub fn bytes_bar(style: BarStyle, total_bytes: u64, label: &str) -> ProgressBar 
     pb
 }
 
+/// Truncate a bar message so the WHOLE bar line fits the terminal width —
+/// a wrapped bar line breaks indicatif's cursor-up redraw and the bars
+/// stack (the "cooked terminal" look). Reserve room for the stats fields.
+pub fn fit_message(msg: &str) -> String {
+    let width = crate::ui::term_width();
+    // stats occupy roughly: "↓ 999.9 MiB @ 999.9 MiB/s 999m " ≈ 36 cols
+    let budget = width.saturating_sub(40).max(20);
+    if msg.chars().count() <= budget {
+        msg.to_string()
+    } else {
+        let truncated: String = msg.chars().take(budget - 1).collect();
+        format!("{truncated}…")
+    }
+}
+
 /// An open-ended flow bar for installs whose download size is unknowable
 /// (AUR source builds): no percentage, but the live byte counter climbs as
 /// the package manager downloads — the bar never looks dead.
@@ -111,7 +126,7 @@ pub fn flow_bar(style: BarStyle, label: &str) -> ProgressBar {
                 BarStyle::Sparkles => "━─",
             }),
     );
-    pb.set_message(label.to_string());
+    pb.set_message(fit_message(label));
     pb.enable_steady_tick(std::time::Duration::from_millis(500));
     set_active(&pb);
     pb

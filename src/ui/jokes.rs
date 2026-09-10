@@ -1,8 +1,11 @@
-//! Jokes during installs. Fresh ones from the internet (icanhazdadjoke),
-//! cached to disk; bundled fallbacks when offline. Cycling one into the
-//! spinner keeps long installs company.
+//! Jokes during installs. Primary source: the px joke dataset
+//! (github.com/samuelgirmametaferia/pxJokeData — the r/Jokes collection).
+//! A SECTION of the compressed TSV is range-fetched (~256KB, never the
+//! whole file), partially decompressed, and the humorous entries (label 1)
+//! become the local pool. icanhazdadjoke supplements; bundled fallbacks
+//! cover offline first runs. One joke rotates into every install and the
+//! bar message every ~15s.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -21,8 +24,9 @@ const BUNDLED: &[&str] = &[
     "why was the javascript developer sad? because he didn't Node how to Express himself.",
 ];
 
-static JOKES: OnceLock<Vec<String>> = OnceLock::new();
+static JOKES: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+static INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The rotation index persists on disk — px is a fresh process every run,
 /// and an in-memory counter resets to the SAME first joke every single
@@ -70,8 +74,25 @@ pub fn init(client: &reqwest::Client) {
             return;
         };
         rt.block_on(async {
+            // primary: a section of the px joke dataset
+            if let Some(pool) = fetch_dataset_section(&client).await {
+                // RwLock: the pool merges into the live set (OnceLock's
+                // set-once semantics silently dropped fetched jokes)
+                let mut guard = JOKES.write().unwrap();
+                for j in pool {
+                    if !guard.contains(&j) {
+                        guard.push(j);
+                    }
+                }
+                let keep: Vec<String> = guard.iter().skip(BUNDLED.len()).cloned().collect();
+                drop(guard);
+                if !keep.is_empty() {
+                    crate::cache::put("fun", cache_key, &keep.join("\n"));
+                }
+                return;
+            }
+            // fallback: icanhazdadjoke
             let mut fetched: Vec<String> = Vec::new();
-            // grab a few; each request is tiny
             for _ in 0..3 {
                 let Ok(resp) = client
                     .get("https://icanhazdadjoke.com")
@@ -96,31 +117,137 @@ pub fn init(client: &reqwest::Client) {
         });
     });
 
-    let _ = JOKES.set(jokes);
+    let mut guard = JOKES.write().unwrap();
+    if guard.is_empty() {
+        *guard = jokes;
+        INITIALIZED.store(true, Ordering::Release);
+    }
 }
 
 /// Cycle to the next joke — round-robin ACROSS RUNS (disk-persisted
 /// index) and within a run.
 pub fn next() -> String {
-    let jokes = JOKES.get_or_init(|| BUNDLED.iter().map(|s| s.to_string()).collect());
+    ensure_init();
+    let jokes_len = JOKES.read().unwrap().len();
+    let jokes_clone;
     // in-process calls advance the atomic; the first call of each process
     // seeds it from the persisted index so runs continue the rotation
     let i = if NEXT.load(Ordering::Relaxed) == 0 {
         let start = load_rotation();
         NEXT.store(start + 1, Ordering::Relaxed);
         store_rotation(start + 1);
-        start % jokes.len()
+        start % jokes_len.max(1)
     } else {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         store_rotation(n + 1);
-        n % jokes.len()
+        n % jokes_len.max(1)
     };
-    jokes[i].clone()
+    jokes_clone = JOKES
+        .read()
+        .unwrap()
+        .get(i)
+        .cloned()
+        .unwrap_or_else(|| BUNDLED[0].to_string());
+    jokes_clone
+}
+
+fn ensure_init() {
+    if !INITIALIZED.load(Ordering::Acquire) {
+        let mut guard = JOKES.write().unwrap();
+        if guard.is_empty() {
+            *guard = BUNDLED.iter().map(|s| s.to_string()).collect();
+            INITIALIZED.store(true, Ordering::Release);
+        }
+    }
 }
 
 /// All jokes (for the tutorial / doctor fun).
 pub fn all() -> Vec<String> {
-    JOKES
-        .get_or_init(|| BUNDLED.iter().map(|s| s.to_string()).collect())
-        .clone()
+    ensure_init();
+    JOKES.read().unwrap().clone()
+}
+
+const JOKE_DATA_REPO: &str = "samuelgirmametaferia/pxJokeData";
+const JOKE_SECTION_BYTES: usize = 256 * 1024; // a section, never the whole file
+
+/// Range-fetch a 256KB section of one of the dataset's gzipped TSVs,
+/// decompress what we can, and return the humorous (label 1) jokes.
+/// Picks the file by day so different runs sample different sections.
+async fn fetch_dataset_section(client: &reqwest::Client) -> Option<Vec<String>> {
+    let files = ["dev.tsv.gz", "test.tsv.gz", "train.tsv.gz"];
+    let day = chrono::Utc::now().format("%j").to_string();
+    let pick = day
+        .chars()
+        .last()
+        .and_then(|c| c.to_digit(10))
+        .map(|d| (d % files.len() as u32) as usize)
+        .unwrap_or(0);
+    let url = format!(
+        "https://raw.githubusercontent.com/{}/{}/data/{}",
+        JOKE_DATA_REPO, "master", files[pick]
+    );
+    let resp = client
+        .get(&url)
+        .header("Range", format!("bytes=0-{JOKE_SECTION_BYTES}"))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+    // 206 = partial content (range honored); 200 means the server ignored
+    // the range and is sending the whole file — take it but stop reading
+    // after the section size to avoid pulling megabytes
+    let bytes: Vec<u8> = if resp.status().as_u16() == 206 {
+        resp.bytes().await.ok()?.to_vec()
+    } else {
+        // the server ignored the range — stream chunks and stop at the cap
+        let mut resp = resp;
+        let mut buf: Vec<u8> = Vec::with_capacity(JOKE_SECTION_BYTES);
+        while buf.len() < JOKE_SECTION_BYTES {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    buf.extend_from_slice(&chunk);
+                    if buf.len() >= JOKE_SECTION_BYTES {
+                        buf.truncate(JOKE_SECTION_BYTES);
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        buf
+    };
+    if bytes.is_empty() {
+        return None;
+    }
+    // partial gzip decompress: flate2 gives us everything decompressable
+    use flate2::read::MultiGzDecoder;
+    use std::io::Read;
+    let mut text = String::new();
+    let mut dec = MultiGzDecoder::new(&bytes[..]);
+    let _ = dec.read_to_string(&mut text); // errors at truncation — fine
+    let jokes: Vec<String> = text
+        .lines()
+        .filter_map(|l| {
+            let (label, body) = l.split_once('\t')?;
+            if label.trim() != "1" {
+                return None; // only the humorous ones
+            }
+            let body = body.trim();
+            // reasonable length for a spinner line; skip novels
+            if body.len() < 20 || body.len() > 200 || body.contains('\n') {
+                return None;
+            }
+            Some(body.to_string())
+        })
+        .collect();
+    if jokes.is_empty() {
+        None
+    } else {
+        tracing::debug!(
+            "joke dataset: {} jokes from a section of {}",
+            jokes.len(),
+            files[pick]
+        );
+        Some(jokes)
+    }
 }

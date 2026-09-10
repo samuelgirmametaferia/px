@@ -138,20 +138,24 @@ impl Installer for SourceProvider {
             )));
         };
         // sudo credentials are cached by the preflight, so the install
-        // command itself doesn't need the terminal.
+        // command itself shouldn't need the terminal — EXCEPT AUR helpers
+        // (yay/paru): they invoke sudo again mid-build (package install
+        // step), and without a tty that sudo dies reading the password
+        // ("sudo: timed out reading password"). Helpers always inherit.
+        let is_helper_source = self.helper().is_some();
         if def.elevated && !ctx.dry_run {
             crate::backend::elevate::preflight().await?;
         }
         let pkg = pkgs.first().cloned().unwrap_or_default();
         let argv = expand_argv(&def.argv, &pkg, pkgs, self.helper(), None);
         // px owns the display: package-manager output is captured (quiet),
-        // except with -v where it streams through untouched.
+        // except with -v — or for helpers, which own their own progress.
         let out = self
             .exec
             .run(
                 &argv,
                 RunOpts {
-                    inherit: ctx.verbose,
+                    inherit: ctx.verbose || is_helper_source,
                     dry_run: ctx.dry_run,
                     ..Default::default()
                 },

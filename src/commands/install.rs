@@ -322,7 +322,10 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
     let mut ledger = Ledger::load();
     let mut failures = Vec::new();
     for (source, pkgs) in &by_source {
-        bar.set_message(format!("installing {} via {source}", pkgs.join(", ")));
+        bar.set_message(crate::ui::progress::fit_message(&format!(
+            "installing {} via {source}",
+            pkgs.join(", ")
+        )));
         // Installers are ordered like providers; find by source id.
         let idx = providers.iter().position(|p| p.source_id() == *source);
         let installer: Option<&Arc<dyn Installer>> = idx.and_then(|i| installers.get(i));
