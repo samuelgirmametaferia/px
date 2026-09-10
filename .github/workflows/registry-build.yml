@@ -55,8 +55,12 @@ jobs:
       # 4. incremental build: only changed shards are rebuilt
       - name: Build changed shards
         run: |
+          # compact + merge: multi-line JSON shatters under sort and the
+          # builder sees code fragments as records
+          jq -c '.' validated.jsonl 2>/dev/null > validated-compact.jsonl || true
+          cat registry-seed.jsonl validated-compact.jsonl | jq -c '.' | sort -u > build-input.jsonl
           ./target/release/px-registry build \
-            --input <(cat registry-seed.jsonl validated.jsonl | sort -u) \
+            --input build-input.jsonl \
             --out registry-out
 
       # 2c. publish the candidate list to the `candidates` branch — using a
