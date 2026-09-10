@@ -12,4 +12,5 @@ pub mod status;
 pub mod suggest;
 pub mod tutorial;
 pub mod uninstall;
+pub mod update;
 pub mod upgrade;

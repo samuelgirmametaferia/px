@@ -218,3 +218,64 @@ pub fn human_size(bytes: u64) -> String {
         format!("{size:.1} {}", units[unit])
     }
 }
+
+/// Files owned by an installed package — used to discover the commands a
+/// native install actually provides (metasploit installs msfconsole, not
+/// metasploit). Returns paths.
+pub async fn package_files(
+    exec: &Arc<dyn Executor>,
+    recipe: &Recipe,
+    pkg: &str,
+) -> PxResult<Vec<String>> {
+    let Some(def) = &recipe.maintenance.files else {
+        return Ok(Vec::new());
+    };
+    let argv = expand_argv(&def.argv, pkg, &[pkg.to_string()], None, None);
+    let out = exec
+        .run(
+            &argv,
+            RunOpts {
+                timeout: Some(std::time::Duration::from_secs(15)),
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(out
+        .stdout
+        .lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .map(|p| p.to_string())
+                .or_else(|| {
+                    let t = l.trim();
+                    if t.starts_with('/') {
+                        Some(t.to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect())
+}
+
+/// The standard executable directories (bin-dirs) a package's commands
+/// can land in.
+const BIN_DIRS: &[&str] = &["/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/opt"];
+
+/// Extract command-like paths (executables in bin dirs) from a file list.
+pub fn commands_from_files(files: &[String]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|f| BIN_DIRS.iter().any(|d| f.starts_with(d)))
+        .filter(|f| !f.ends_with('/')).cloned()
+        .collect()
+}
+
+/// Is a path on the user's PATH (by directory)?
+pub fn dir_on_path(dir: &str) -> bool {
+    match std::env::var("PATH") {
+        Ok(p) => p.split(':').any(|d| d == dir),
+        Err(_) => false,
+    }
+}

@@ -83,6 +83,8 @@ pub struct Maintenance {
     pub explicit: Option<CommandDef>,
     /// Full system upgrade (`pacman -Syu`, `apt upgrade`, ...).
     pub upgrade: Option<CommandDef>,
+    /// Files owned by an installed package (`pacman -Ql`, `dpkg -L`).
+    pub files: Option<CommandDef>,
 }
 
 /// A well-known application that installs through its own channel rather

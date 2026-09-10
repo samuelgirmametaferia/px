@@ -103,6 +103,9 @@ pub enum Command {
     /// Repos the GitHub discovery system has found (candidates branch).
     Candidates,
 
+    /// Update px itself from GitHub releases (also refreshes recipes).
+    Update,
+
     /// Find unused/unneeded packages and offer to remove them (free space).
     Suggest,
 

@@ -172,6 +172,8 @@ impl Installer for SourceProvider {
 
 /// Show the tail of a failed command's output (stdout+stderr interleaved,
 /// last 25 lines) — enough to see the real error without the flood.
+/// Recipe commands can drift (package-manager flag changes) — failures
+/// always hint at pulling fresh recipes from the web.
 fn print_output_tail(cmd: &str, out: &crate::exec::ExecOutput) {
     let combined = format!("{}{}", out.stdout, out.stderr);
     if combined.trim().is_empty() {
@@ -183,4 +185,7 @@ fn print_output_tail(cmd: &str, out: &crate::exec::ExecOutput) {
     for line in &lines[start..] {
         eprintln!("  {line}");
     }
+    eprintln!(
+        "  ── if the command looks wrong for your package manager, `px update` pulls fresh recipes ──"
+    );
 }

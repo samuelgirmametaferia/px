@@ -158,3 +158,6 @@ require_any = ["curl"]
 [maintenance.upgrade]
 argv = ["sudo", "pacman", "-Syu", "--noconfirm"]
 elevated = true
+
+[maintenance.files]
+argv = ["pacman", "-Ql", "{pkg}"]

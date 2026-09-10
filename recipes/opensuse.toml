@@ -138,3 +138,6 @@ require_any = ["curl"]
 [maintenance.upgrade]
 argv = ["sudo", "zypper", "--non-interactive", "update"]
 elevated = true
+
+[maintenance.files]
+argv = ["rpm", "-ql", "{pkg}"]

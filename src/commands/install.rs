@@ -92,9 +92,23 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                         &pb,
                         format!("{spec} → exact identity match, resolving project"),
                     );
-                    if crate::universal::try_install(&app, &spec).await? {
-                        universal_handled += 1;
-                        continue;
+                    match crate::universal::try_install(&app, &spec).await {
+                        Ok(true) => {
+                            universal_handled += 1;
+                            continue;
+                        }
+                        Ok(false) => {}
+                        // every method under the verified identity failed —
+                        // DON'T fail the install: fall through to the fuzzy
+                        // candidates so the user can pick something else
+                        Err(e) => {
+                            println!(
+                                "    {} universal install failed: {}",
+                                style.warn("⚠"),
+                                style.dim(format!("{e}").lines().next().unwrap_or(""))
+                            );
+                            println!("    {} showing other options for '{spec}'…", style.dim("·"));
+                        }
                     }
                 }
                 // Let the user pick.
@@ -331,6 +345,9 @@ pub async fn run(app: App, specs: &[String]) -> PxResult<()> {
                                 );
                                 crate::state::journal_step(&mut journal, p);
                             }
+                            // announce the commands the package actually
+                            // provides (metasploit → msfconsole)
+                            let _ = announce_commands(&app, pkgs).await;
                         }
                     }
                     Err(e) => {
@@ -497,5 +514,142 @@ async fn universal_verified_identity(app: &App, spec: &str) -> bool {
             verified
         }
         _ => false,
+    }
+}
+
+/// After a native install: discover the commands the package actually
+/// provides (`pacman -Ql` etc. via the recipe), announce them when they
+/// differ from the package name, offer to add non-PATH bin dirs, and note
+/// fish's command cache (a new binary is invisible to a running fish until
+/// `rehash`).
+async fn announce_commands(app: &App, pkgs: &[String]) -> PxResult<()> {
+    let style = &app.style;
+    for pkg in pkgs {
+        let Ok(files) = crate::maintenance::package_files(&app.exec, app.recipe(), pkg).await
+        else {
+            continue;
+        };
+        if files.is_empty() {
+            continue;
+        }
+        let cmds = crate::maintenance::commands_from_files(&files);
+        if cmds.is_empty() {
+            continue;
+        }
+        // only the leaf names, deduped, top 6
+        let mut names: Vec<String> = cmds
+            .iter()
+            .map(|c| c.rsplit('/').next().unwrap_or(c).to_string())
+            .collect();
+        names.sort();
+        names.dedup();
+        // the leaf dirs they live in
+        let mut dirs: Vec<String> = cmds
+            .iter()
+            .filter_map(|c| c.rsplit_once('/').map(|(d, _)| d.to_string()))
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+
+        let exact = names.iter().any(|n| n == pkg);
+        let shown: Vec<&str> = names.iter().take(6).map(|s| s.as_str()).collect();
+        let more = if names.len() > 6 {
+            format!(" +{} more", names.len() - 6)
+        } else {
+            String::new()
+        };
+        if !exact {
+            println!(
+                "\n    {} the command{} {} — not {}{}",
+                style.bold("▶"),
+                if shown.len() > 1 { "s are" } else { " is" },
+                style.bold(&shown.join(", ")),
+                style.dim(pkg),
+                style.dim(&more)
+            );
+        } else if names.len() > 1 {
+            println!(
+                "\n    {} also provides: {}{}",
+                style.dim("·"),
+                style.dim(&shown.join(", ")),
+                style.dim(&more)
+            );
+        }
+
+        // bin dirs that are NOT on PATH → offer to add them
+        let off_path: Vec<&String> = dirs
+            .iter()
+            .filter(|d| !crate::maintenance::dir_on_path(d))
+            .collect();
+        if !off_path.is_empty() && crate::ui::interactive() {
+            let dir_list = off_path
+                .iter()
+                .map(|d| style.bold(d.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("    {} {} not on your PATH", style.warn("⚠"), dir_list);
+            if crate::ui::prompt::confirm("add it to your PATH?", true)? {
+                add_to_path(off_path.iter().map(|s| s.as_str()).collect()).await;
+            }
+        }
+
+        // fish caches command lookups — new binaries are invisible until
+        // rehash; tell the user so they don't think the install failed
+        let shell = std::env::var("SHELL").unwrap_or_default();
+        if shell.contains("fish") && which::which(pkg).is_err() {
+            println!(
+                "    {} fish caches commands — run {} if {} isn't found yet",
+                style.dim("·"),
+                style.bold("rehash"),
+                style.bold(shown[0])
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Append bin dirs to the user's shell config (fish or POSIX).
+async fn add_to_path(dirs: Vec<&str>) {
+    let home = dirs::home_dir().unwrap_or_default();
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let (config, line) = if shell.contains("fish") {
+        (
+            home.join(".config/fish/config.fish"),
+            format!("set -gx PATH {} $PATH", dirs.join(" ")),
+        )
+    } else {
+        (
+            home.join(".profile"),
+            format!(r#"export PATH="{}:$PATH""#, dirs.join(":")),
+        )
+    };
+    let existing = std::fs::read_to_string(&config).unwrap_or_default();
+    if existing.contains(&line) {
+        println!(
+            "    already in {} — it will apply in new shells",
+            config.display()
+        );
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config)
+    {
+        let _ = writeln!(f, "# added by px");
+        let _ = writeln!(f, "{line}");
+        println!(
+            "    added to {} — it applies in new shells",
+            config.display()
+        );
+        println!(
+            "    for THIS shell: {}",
+            if shell.contains("fish") {
+                format!("set -gx PATH {} $PATH", dirs.join(" "))
+            } else {
+                format!(r#"export PATH="{}:$PATH""#, dirs.join(":"))
+            }
+        );
     }
 }
