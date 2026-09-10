@@ -36,7 +36,12 @@ jobs:
 
       # 3. validate candidates in the disposable sandbox job
       - name: Validate (container sandbox, no secrets, timeouts)
-        run: ./scripts/registry-validate.sh todo.jsonl validated.jsonl
+        run: |
+          # the validator runs candidates inside bwrap — ubuntu runners
+          # don't ship it, so every candidate was "failing" in ~200ms
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          bwrap --version
+          ./scripts/registry-validate.sh todo.jsonl validated.jsonl
 
       # 4. incremental build: only changed shards are rebuilt
       - name: Build changed shards

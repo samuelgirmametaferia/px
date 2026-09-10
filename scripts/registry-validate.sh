@@ -6,7 +6,7 @@ set -euo pipefail
 IN="$1"; OUT="$2"; : > "$OUT"
 while read -r rec; do
   echo "$rec" > /tmp/candidate.json
-  if ./registry-infra/validator.sh /tmp/candidate.json > /tmp/receipt.json 2>/dev/null; then
+  if ./registry-infra/validator.sh /tmp/candidate.json > /tmp/receipt.json; then
     # attach the receipt hash to the record and promote to validated
     jq --slurpfile r /tmp/receipt.json '. +
       {security_state: "validated",
