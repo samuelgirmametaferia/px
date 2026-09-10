@@ -13,7 +13,10 @@ QUERY_PREFIX='curl -fsSL language:Shell pushed:>2026-08-01'
 # GITHUB_TOKEN and supports in:readme. ALL queries per run with sleeps
 # between them (3 requests/run is far under the search rate limit —
 # the earlier 429s came from --paginate on code search, not this).
-QUERIES=('"curl -fsSL | bash" in:readme' '"curl -fsSL | sh" in:readme' '"wget -qO- | sh" in:readme')
+# user-space installers: the ~ or $HOME target and the .local/bin path are
+# the signal — "curl | bash" alone mostly finds root installers that fail
+# per-user sandbox validation
+QUERIES=('"curl -fsSL | bash" "~" in:readme' '"install.sh" ".local/bin" in:readme' '"go install" in:readme' '"cargo install" in:readme')
 for q in "${QUERIES[@]}"; do
   encoded=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$q pushed:>2026-08-01")
   for attempt in 1 2; do

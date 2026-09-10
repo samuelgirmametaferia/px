@@ -103,8 +103,8 @@ pub enum Command {
     /// Repos the GitHub discovery system has found (candidates branch).
     Candidates,
 
-    /// Update px itself from GitHub releases (also refreshes recipes).
-    Update,
+    /// Update px itself (no args) or specific packages (px update neovim).
+    Update { pkgs: Vec<String> },
 
     /// Find where a package's binaries live (and what commands it provides).
     Path { name: String },

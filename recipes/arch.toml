@@ -48,7 +48,7 @@ parse = "pacman_files"
 [[sources]]
 id = "aur"
 label = "AUR"
-require_any = ["paru", "yay"]
+require_any = ["paru", "yay", "pikaur", "trizen", "aurman", "aura"]
 
 [sources.search]
 argv = ["{helper}", "-Ss", "--aur", "{pkg}"]

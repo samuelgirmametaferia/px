@@ -1,11 +1,11 @@
 # PKGBUILD for px — dogfooding: publish px to the AUR so `px install px` works.
 # (placeholder source; fill in the release tag when publishing)
 pkgname=px
-pkgver=0.1.0
+pkgver=3.1.0
 pkgrel=1
 pkgdesc="the package-manager front-end for every Linux distro"
 arch=('x86_64' 'aarch64')
-url="https://github.com/arrow/px"
+url="https://github.com/samuelgirmametaferia/px"
 license=('MIT')
 depends=('gcc-libs')
 makedepends=('cargo')

@@ -81,7 +81,13 @@ fn build_registry(records: &[RegistryRecord]) -> std::path::PathBuf {
     out
 }
 
+/// The registry tests share ~/.cache/px/registry — parallel runs that clear
+/// or rewrite it race (the flaky "normalized alias must resolve" failure).
+/// Tests that touch the shared cache hold this lock.
+static CACHE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn lookup(dir: &std::path::Path, query: &str) -> Option<RegistryRecord> {
+    let _guard = CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::new();
     let source = registry::RegistrySource::Dir(dir.to_path_buf());
@@ -162,6 +168,7 @@ fn corrupted_shard_is_rejected_not_returned() {
     corrupted[mid] ^= 0xFF;
     std::fs::write(&shard_file, corrupted).unwrap();
 
+    let _guard = CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::new();
     let _ = std::fs::remove_dir_all(registry::cache_dir());

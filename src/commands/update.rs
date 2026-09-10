@@ -55,7 +55,7 @@ pub async fn run(app: App) -> PxResult<()> {
         style.bold(&latest_version)
     );
 
-    if latest_version == current {
+    if version_lte(&latest_version, current) {
         println!("  {} px is up to date", style.ok("✔"));
     } else {
         println!("  {} updating…", style.dim("↓"));
@@ -128,4 +128,73 @@ pub async fn run(app: App) -> PxResult<()> {
     println!("  {} recipes will be fresh on next run", style.ok("✔"));
 
     Ok(())
+}
+
+/// Semver-aware a <= b. String equality fails on 3.10.0 vs 3.9.0 ("3.10"
+/// sorts before "3.9" lexically), which would hide real updates.
+fn version_lte(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
+            .collect()
+    };
+    let (av, bv) = (parse(a), parse(b));
+    let n = av.len().max(bv.len());
+    let av: Vec<u64> = (0..n).map(|i| av.get(i).copied().unwrap_or(0)).collect();
+    let bv: Vec<u64> = (0..n).map(|i| bv.get(i).copied().unwrap_or(0)).collect();
+    av <= bv
+}
+
+/// `px update <pkg>...` — per-package update: re-run install resolution
+/// for each (already-installed packages get refreshed to latest).
+pub async fn run_pkgs(app: App, pkgs: &[String]) -> PxResult<()> {
+    let style = &app.style;
+    let providers = app.providers();
+    let mut outdated: Vec<String> = Vec::new();
+    for pkg in pkgs {
+        let mut installed = false;
+        for p in &providers {
+            if p.is_installed(pkg).await.unwrap_or(false) {
+                installed = true;
+                break;
+            }
+        }
+        let installed = installed;
+        if !installed {
+            println!(
+                "  {} {} is not installed — use `px install {pkg}`",
+                style.warn("○"),
+                style.bold(pkg)
+            );
+            continue;
+        }
+        outdated.push(pkg.clone());
+    }
+    if outdated.is_empty() {
+        return Ok(());
+    }
+    // reuse the install machinery: it resolves to the latest version and
+    // skips if the resolved version is already present
+    super::install::run(app, &outdated).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_lte;
+
+    #[test]
+    fn semver_ordering() {
+        assert!(version_lte("3.1.0", "3.1.0"));
+        assert!(version_lte("3.1.0", "3.10.0")); // the lexical trap
+        assert!(!version_lte("3.10.0", "3.9.0"));
+        assert!(version_lte("3.9.0", "3.10.0"));
+        assert!(version_lte("2.99.0", "3.0.0"));
+        assert!(!version_lte("3.1.0", "3.0.9"));
+    }
 }
