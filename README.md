@@ -14,6 +14,8 @@
 
 ---
 
+![px demo](docs/demo.gif)
+
 `px install <anything>` identifies the actual software project you mean —
 never just a name match — discovers every legitimate way to install it,
 ranks the methods by safety and reliability, and installs the right
