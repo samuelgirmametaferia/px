@@ -129,7 +129,7 @@ pub fn init(client: &reqwest::Client) {
 pub fn next() -> String {
     ensure_init();
     let jokes_len = JOKES.read().unwrap().len();
-    
+
     // in-process calls advance the atomic; the first call of each process
     // seeds it from the persisted index so runs continue the rotation
     let i = if NEXT.load(Ordering::Relaxed) == 0 {
@@ -142,13 +142,12 @@ pub fn next() -> String {
         store_rotation(n + 1);
         n % jokes_len.max(1)
     };
-    let jokes_clone = JOKES
+    JOKES
         .read()
         .unwrap()
         .get(i)
         .cloned()
-        .unwrap_or_else(|| BUNDLED[0].to_string());
-    jokes_clone
+        .unwrap_or_else(|| BUNDLED[0].to_string())
 }
 
 fn ensure_init() {
