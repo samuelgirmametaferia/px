@@ -335,7 +335,9 @@ impl ShellDetector {
         if ext.is_empty()
             && let Some(line) = first_line(file)
             && line.starts_with("#!")
-            && (line.contains("/sh") || line.contains("bash"))
+            && shebang_interpreter(&line).is_some_and(|interp| {
+                matches!(interp.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh")
+            })
         {
             return true;
         }
@@ -345,16 +347,23 @@ impl ShellDetector {
 
 /// Function names defined anywhere in the script (`foo() {`, `function foo`).
 fn defined_functions(text: &str) -> BTreeSet<String> {
-    let re = regex::Regex::new(r"(?m)^\s*(?:function\s+)?([\w-]+)\s*\(\s*\)").unwrap();
+    let re = regex::Regex::new(
+        r"(?m)^\s*(?:[A-Za-z_]\w*=[^\s]*\s+)*(?:function\s+([\w-]+)\b|([\w-]+)\s*\(\s*\))",
+    )
+    .unwrap();
     re.captures_iter(text)
-        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .filter_map(|c| {
+            c.get(1)
+                .or_else(|| c.get(2))
+                .map(|m| m.as_str().to_string())
+        })
         .collect()
 }
 
 /// True for lines that are `case` branch patterns (`foo|bar)` or `*)`).
 fn is_case_pattern(line: &str) -> bool {
     let t = line.trim_start();
-    let Some(before) = t.split(')').next() else {
+    let Some((before, _)) = t.split_once(')') else {
         return false;
     };
     !before.is_empty()
@@ -382,7 +391,7 @@ impl Detector for ShellDetector {
         // Word at "command position": start of line or after ; | & $( `etc.
         // (?m) makes ^ anchor at every line start.
         let cmd_start = regex::Regex::new(
-            r"(?m)(?:^|[;|&]\s*|\$\(\s*|`\s*|\bthen\s+|\bdo\s+|\belse\s+|\belif\s+)([a-zA-Z][\w.+-]*)",
+            r"(?m)(?:^\s*|[;|&]\s*|\$\(\s*|`\s*|\bthen\s+|\bdo\s+|\belse\s+|\belif\s+)([a-zA-Z][\w.+-]*)",
         )
         .unwrap();
         // Assignment lines: `FOO=...`, `local FOO=...`, `export FOO=...`.
@@ -491,6 +500,9 @@ fn shebang_interpreter(line: &str) -> Option<String> {
     let mut interp = parts.next()?;
     if interp.ends_with("/env") {
         interp = parts.next()?;
+        if interp == "-S" {
+            interp = parts.next()?;
+        }
     }
     let interp = interp.rsplit('/').next()?;
     if interp

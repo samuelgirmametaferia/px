@@ -32,11 +32,11 @@ pub fn run(app: App) -> PxResult<()> {
             name = name.fg(color);
             source = source.fg(color);
         }
-        table.add_row(vec![
-            name,
-            source,
-            Cell::new(e.installed_at.to_rfc3339()).fg(Color::DarkGrey),
-        ]);
+        let mut installed_at = Cell::new(e.installed_at.to_rfc3339());
+        if colors_on {
+            installed_at = installed_at.fg(Color::DarkGrey);
+        }
+        table.add_row(vec![name, source, installed_at]);
     }
     println!("{table}");
     println!(

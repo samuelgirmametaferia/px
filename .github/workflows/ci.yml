@@ -17,6 +17,8 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Installer regressions
+        run: python3 scripts/test-installer.py
       - name: Tests
         run: cargo test
       - name: Recipes validate

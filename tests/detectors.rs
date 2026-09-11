@@ -169,3 +169,58 @@ fn java_fixture_finds_build_tool() {
     assert!(d.tools.iter().any(|t| t == "maven"));
     assert!(d.tools.iter().any(|t| t == "jdk-openjdk"));
 }
+
+#[test]
+fn node_imports_preserve_package_identity() {
+    let d = analyze("node", "fixtures/regressions/node");
+    let mut names: Vec<_> = d.local.iter().map(|dep| dep.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["@scope/package", "chalk", "http-server", "lodash"]);
+}
+
+#[test]
+fn empty_node_manifest_is_authoritative() {
+    assert!(
+        analyze("node", "fixtures/regressions/node-empty")
+            .local
+            .is_empty()
+    );
+}
+
+#[test]
+fn typing_extensions_is_a_third_party_dependency() {
+    let d = analyze("python", "fixtures/regressions/python");
+    assert!(d.system.iter().any(|dep| dep.import == "typing_extensions"));
+    assert!(!d.system.iter().any(|dep| dep.import == "typing"));
+}
+
+#[test]
+fn shell_handles_env_split_string_indentation_and_functions() {
+    use px::forfile::detector::Detector;
+    let root =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/regressions/shell");
+    let files = px::forfile::detector::scan_source_files(&root, 100);
+    assert!(px::forfile::shell::ShellDetector.matches(&root, &files));
+    let d = analyze("shell", "fixtures/regressions/shell");
+    let names: Vec<_> = d.system.iter().map(|dep| dep.import.as_str()).collect();
+    for command in ["command: jq", "command: ffmpeg", "command: inotifywait"] {
+        assert!(names.contains(&command), "{names:?}");
+    }
+    assert!(!names.contains(&"command: localhelper"));
+}
+
+#[test]
+fn project_detection_accepts_supported_script_extensions() {
+    for file in ["app.mjs", "app.cjs", "app.jsx", "app.tsx", "app.zsh"] {
+        assert!(px::forfile::detector::looks_like_project_file(
+            std::path::Path::new(file)
+        ));
+    }
+    assert!(
+        px::forfile::detector::scan_source_files(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            0
+        )
+        .is_empty()
+    );
+}

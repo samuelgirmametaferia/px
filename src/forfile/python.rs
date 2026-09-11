@@ -130,7 +130,6 @@ const STDLIB: &[&str] = &[
     "tracemalloc",
     "typing",
     "types",
-    "typing_extensions",
     "unicodedata",
     "unittest",
     "urllib",
@@ -148,7 +147,6 @@ const STDLIB: &[&str] = &[
     "zipimport",
     "zlib",
     "__future__",
-    "typing_extensions",
     "antigravity",
     "this",
 ];

@@ -16,6 +16,10 @@ pub async fn run(app: App) -> PxResult<()> {
 
     // current version
     let current = env!("CARGO_PKG_VERSION");
+    if app.cli.dry_run {
+        println!("  would check for a newer px release and refresh the active recipe");
+        return Ok(());
+    }
 
     // resolve the latest v-tag from the tags atom feed — no API rate
     // limits, no auth (releases/latest points at the registry's rolling
@@ -25,6 +29,7 @@ pub async fn run(app: App) -> PxResult<()> {
         .get(format!("https://github.com/{REPO}/tags.atom"))
         .send()
         .await?
+        .error_for_status()?
         .text()
         .await?;
     // entry ids: tag:github.com,2008:Repository/…/v3.1.0 — the tag is
@@ -46,7 +51,8 @@ pub async fn run(app: App) -> PxResult<()> {
             "could not resolve the latest px version".into(),
         ));
     }
-    let download_url = format!("https://github.com/{REPO}/releases/download/v{latest_version}/px");
+    let asset = release_asset(std::env::consts::OS, std::env::consts::ARCH)?;
+    let release_url = format!("https://github.com/{REPO}/releases/download/v{latest_version}");
 
     println!(
         "  {} current: {}   latest: {}",
@@ -59,14 +65,19 @@ pub async fn run(app: App) -> PxResult<()> {
         println!("  {} px is up to date", style.ok("✔"));
     } else {
         println!("  {} updating…", style.dim("↓"));
-        let bytes = app
+        let response = app
             .client
-            .get(&download_url)
+            .get(format!("{release_url}/{asset}"))
             .send()
-            .await?
-            .error_for_status()?
-            .bytes()
             .await?;
+        let response = if response.status() == reqwest::StatusCode::NOT_FOUND
+            && std::env::consts::ARCH == "x86_64"
+        {
+            app.client.get(format!("{release_url}/px")).send().await?
+        } else {
+            response
+        };
+        let bytes = response.error_for_status()?.bytes().await?;
 
         // find the running binary
         let exe = std::env::current_exe()
@@ -85,12 +96,15 @@ pub async fn run(app: App) -> PxResult<()> {
                 .map_err(|e| PxError::User(format!("chmod: {e}")))?;
         }
         // verify the new binary actually runs before replacing
-        let out = tokio::process::Command::new(&tmp)
-            .arg("--version")
-            .output()
-            .await;
+        let mut verification = tokio::process::Command::new(&tmp);
+        verification.arg("--version").kill_on_drop(true);
+        let out =
+            tokio::time::timeout(std::time::Duration::from_secs(10), verification.output()).await;
         match out {
-            Ok(o) if o.status.success() => {}
+            Ok(Ok(o))
+                if o.status.success()
+                    && String::from_utf8_lossy(&o.stdout).trim()
+                        == format!("px {latest_version}") => {}
             _ => {
                 let _ = std::fs::remove_file(&tmp);
                 return Err(PxError::User(
@@ -108,26 +122,33 @@ pub async fn run(app: App) -> PxResult<()> {
         );
     }
 
-    // refresh recipes from the web (fundamental-command fixes ship in recipes)
-    let source = crate::registry::source_from_config(&app.config);
-    if let Some(_reg_source) = source {
+    if app.cli.recipe.is_none() {
         println!("  {} refreshing recipes…", style.dim("·"));
+        let recipe_id = &app.recipe().meta.id;
+        let text =
+            crate::recipe::load::fetch_remote(&app.client, &app.config.recipe_repo(), recipe_id)
+                .await?;
+        let recipe = crate::recipe::schema::Recipe::parse_str(&text).map_err(PxError::Recipe)?;
+        if recipe.meta.id != *recipe_id {
+            return Err(PxError::Recipe(
+                "downloaded recipe has an unexpected id".into(),
+            ));
+        }
+        crate::recipe::load::write_cache(recipe_id, &text)?;
+        println!("  {} recipe refreshed", style.ok("✔"));
     }
-    // recipes re-fetch: clear cache + reload is handled by --refresh; do it directly
-    let recipe_id = app.recipe().meta.id.clone();
-    let _ =
-        std::fs::remove_file(crate::recipe::load::cache_dir().join(format!("{recipe_id}.toml")));
-    let _ = app
-        .client
-        .get(format!(
-            "https://raw.githubusercontent.com/{}/{}/recipes/{recipe_id}.toml",
-            app.config.recipe_repo, app.config.recipe_branch
-        ))
-        .send()
-        .await;
-    println!("  {} recipes will be fresh on next run", style.ok("✔"));
 
     Ok(())
+}
+
+fn release_asset(os: &str, arch: &str) -> PxResult<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Ok("px-linux-x86_64"),
+        ("linux", "aarch64") => Ok("px-linux-aarch64"),
+        _ => Err(PxError::User(format!(
+            "no prebuilt px update for {os}/{arch}; update from source"
+        ))),
+    }
 }
 
 /// Semver-aware a <= b. String equality fails on 3.10.0 vs 3.9.0 ("3.10"
@@ -187,6 +208,56 @@ pub async fn run_pkgs(app: App, pkgs: &[String]) -> PxResult<()> {
 #[cfg(test)]
 mod tests {
     use super::version_lte;
+
+    #[tokio::test]
+    async fn dry_run_does_not_contact_the_update_server() {
+        use clap::Parser;
+        use std::sync::Arc;
+        // A listening proxy records any attempted HTTP request without
+        // contacting GitHub. Dry-run must return before it is used.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let client = reqwest::Client::builder()
+            .proxy(
+                reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+            )
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let app = crate::app::App {
+            cli: crate::cli::Cli::parse_from(["px", "--dry-run", "update"]),
+            config: crate::config::Config::default(),
+            style: crate::ui::style::Style::new(false),
+            recipe: crate::recipe::load::LoadedRecipe {
+                recipe: Arc::new(
+                    crate::recipe::schema::Recipe::parse_str(crate::recipe::load::bundled::ARCH)
+                        .unwrap(),
+                ),
+                source: crate::recipe::load::RecipeSource::Bundled,
+            },
+            client,
+            exec: Arc::new(crate::exec::RealExecutor::new()),
+        };
+        super::run(app).await.unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn updates_select_native_assets() {
+        assert_eq!(
+            super::release_asset("linux", "x86_64").unwrap(),
+            "px-linux-x86_64"
+        );
+        assert_eq!(
+            super::release_asset("linux", "aarch64").unwrap(),
+            "px-linux-aarch64"
+        );
+        assert!(super::release_asset("macos", "aarch64").is_err());
+        assert!(super::release_asset("linux", "riscv64").is_err());
+    }
 
     #[test]
     fn semver_ordering() {

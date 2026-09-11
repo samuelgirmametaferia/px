@@ -29,10 +29,12 @@ impl Detector for NodeDetector {
         let mut deps: Vec<String> = Vec::new();
         let mut evidence: Vec<String> = Vec::new();
         let mut native_build = false;
+        let mut has_manifest = false;
 
         for file in files {
             let name = file_name(file);
             if name == "package.json" {
+                has_manifest = true;
                 let Ok(text) = std::fs::read_to_string(file) else {
                     continue;
                 };
@@ -59,10 +61,11 @@ impl Detector for NodeDetector {
         // treat named imports as local deps. Minified/bundled files are
         // skipped: their regex-matched "imports" are code fragments, not
         // dependencies (the scores_mfe.js garbage: "),L,," and friends).
-        if deps.is_empty() {
-            let import_re =
-                regex::Regex::new(r#"(?:require\s*\(|from\s+|import\s+)\s*['"]([^'"]+)['"]"#)
-                    .unwrap();
+        if !has_manifest {
+            let import_re = regex::Regex::new(
+                r#"(?:require\s*\(|from\s+|import\s*\(|import\s+)\s*['"]([^'"]+)['"]"#,
+            )
+            .unwrap();
             for file in files {
                 if !matches!(
                     extension(file).as_str(),
@@ -85,9 +88,13 @@ impl Detector for NodeDetector {
                         if !is_bare_module_name(spec) {
                             continue;
                         }
-                        let name = spec.split('/').next().unwrap_or(spec);
-                        if !deps.contains(&name.to_string()) {
-                            deps.push(name.to_string());
+                        let name = if spec.starts_with('@') {
+                            spec.split('/').take(2).collect::<Vec<_>>().join("/")
+                        } else {
+                            spec.split('/').next().unwrap_or(spec).to_string()
+                        };
+                        if !deps.contains(&name) {
+                            deps.push(name);
                         }
                     }
                 }
@@ -146,15 +153,16 @@ fn is_bare_module_name(spec: &str) -> bool {
         || spec.starts_with('.')
         || spec.starts_with('/')
         || spec.starts_with("node:")
-        || spec.starts_with("http")
+        || spec.starts_with("http:")
+        || spec.starts_with("https:")
     {
         return false;
     }
     // @scope/name or name — nothing else
     let pattern = if spec.starts_with('@') {
-        r"^@?[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        r"^@[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*(?:/[a-zA-Z0-9._-]+)*$"
     } else {
-        r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:/[a-zA-Z0-9._-]+)*$"
     };
     regex::Regex::new(pattern)
         .map(|re| re.is_match(spec))

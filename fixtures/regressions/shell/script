@@ -1,0 +1,7 @@
+#!/usr/bin/env -S zsh -e
+function localhelper {
+    jq '.' data.json
+}
+localhelper
+    ffmpeg -version
+inotifywait

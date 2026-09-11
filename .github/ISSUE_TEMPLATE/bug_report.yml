@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a command, installation, or detection problem.
+body:
+  - type: input
+    id: version
+    attributes:
+      label: px version
+      description: Output of px --version.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distro and architecture
+      placeholder: Ubuntu 24.04, x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Command and expected behavior
+      description: Include the official project URL if px resolved the wrong software.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Actual output
+      description: Remove credentials and private paths. Existing output is enough; do not rerun an installation just to collect logs.
+      render: text
+    validations:
+      required: true
