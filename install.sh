@@ -1,69 +1,78 @@
 #!/bin/sh
-# px installer — the canonical install path:
-#   curl -fsSL https://github.com/samuelgirmametaferia/px/releases/latest/download/install.sh | sh
-#
-# Downloads the latest release binary for the detected arch, verifies it
-# runs, installs to ~/.local/bin (creating it, and warning when it's not on
-# PATH). Refuses to run as root. No sudo, no system modification.
+# Per-user installer. Each published copy defaults to its own product version;
+# registry releases must never influence which executable gets installed.
 set -eu
 
 REPO="samuelgirmametaferia/px"
+DEFAULT_VERSION="v3.1.0"
+TAG="${PX_VERSION:-$DEFAULT_VERSION}"
 DEST="${PX_INSTALL_DIR:-$HOME/.local/bin}"
 
-[ "$(id -u)" -ne 0 ] || { echo "px installs per-user — run as your normal user, not root" >&2; exit 1; }
+fail() { echo "px: $*" >&2; exit 1; }
+[ "$(id -u)" -ne 0 ] || fail "run as your normal user, not root"
+case "$TAG" in
+  v[0-9]*) ;;
+  *) fail "PX_VERSION must be a release tag such as v3.1.0" ;;
+esac
+case "$TAG" in *[!a-zA-Z0-9._-]*) fail "invalid release tag: $TAG" ;; esac
 
-# detect arch
+case "$(uname -s)" in
+  Linux) OS="linux" ;;
+  *) fail "prebuilt binaries support Linux; build from source for other systems" ;;
+esac
 case "$(uname -m)" in
   x86_64|amd64) ARCH="x86_64" ;;
   aarch64|arm64) ARCH="aarch64" ;;
-  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-case "$(uname -s)" in
-  Linux) OS="linux" ;;
-  *) echo "unsupported OS: $(uname -s) (px is Linux-first)" >&2; exit 1 ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
-# resolve the latest px VERSION tag — releases/latest is the registry's
-# rolling release (registry-latest), not the product
-echo "resolving latest version…"
-TAGS=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30")
-TAG=$(printf '%s' "$TAGS" | grep -oE '"tag_name": *"v[0-9][^"]*"' | head -1 | grep -oE 'v[0-9][^"]*')
-[ -n "$TAG" ] || { echo "could not resolve the latest px release" >&2; exit 1; }
-echo "latest release: $TAG"
-
-URL="https://github.com/$REPO/releases/download/$TAG/px"
+if command -v curl >/dev/null 2>&1; then
+  download() { curl --connect-timeout 15 --max-time 180 -fsSL "$1" -o "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  download() { wget --timeout=30 --tries=2 -qO "$2" "$1"; }
+else
+  fail "install curl or wget first"
+fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"' 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-echo "↓ downloading px (latest release, $OS/$ARCH)…"
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$URL" -o "$TMP/px"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$TMP/px" "$URL"
-else
-  echo "need curl or wget to download" >&2; exit 1
+BASE="https://github.com/$REPO/releases/download/$TAG"
+ASSET="px-$OS-$ARCH"
+# v3.1.0 and older shipped only an x86_64 executable named px. Never
+# hand that binary to ARM users; newer releases use explicit asset names.
+echo "↓ downloading px $TAG ($OS/$ARCH)…"
+if ! download "$BASE/$ASSET" "$TMP/px"; then
+  if [ "$ARCH" = x86_64 ]; then
+    download "$BASE/px" "$TMP/px" || fail "no binary available for $TAG ($OS/$ARCH)"
+  else
+    fail "no ARM binary available for $TAG; build with cargo install --path . --bin px"
+  fi
 fi
 
 chmod +x "$TMP/px"
-VERSION="$("$TMP/px" --version 2>/dev/null || echo "unknown")"
-echo "✓ $VERSION downloaded"
+VERSION="$("$TMP/px" --version 2>/dev/null)" || fail "downloaded binary cannot run on this system; existing installation unchanged"
+[ "$VERSION" = "px ${TAG#v}" ] || fail "downloaded binary reports '$VERSION', expected 'px ${TAG#v}'"
 
 mkdir -p "$DEST"
-install -m 755 "$TMP/px" "$DEST/px"
-echo "✓ installed → $DEST/px"
+# Stage beside the destination so replacement is atomic and works even
+# when the installed executable is currently running.
+STAGED="$(mktemp "$DEST/.px-install.XXXXXX")"
+trap 'rm -rf "$TMP"; rm -f "$STAGED"' 0
+install -m 755 "$TMP/px" "$STAGED"
+mv -f "$STAGED" "$DEST/px"
+echo "✓ installed $VERSION → $DEST/px"
 
-case ":$PATH:" in
+case ":${PATH:-}:" in
   *":$DEST:"*) ;;
   *)
     echo ""
-    echo "⚠ $DEST is not on your PATH. Add it:"
-    echo "    echo 'export PATH=\"$DEST:\$PATH\"' >> ~/.profile  # or your shell's config"
+    echo "Add this directory to PATH in your shell configuration:"
+    echo "  $DEST"
     ;;
 esac
 
 echo ""
-echo "px is ready. Try:"
-echo "  px doctor          — see what px detects on this machine"
-echo "  px --tutorial      — learn it in 2 minutes"
-echo "  px install anything"
+echo "Try: px doctor, px --tutorial, or px --dry-run install ripgrep"

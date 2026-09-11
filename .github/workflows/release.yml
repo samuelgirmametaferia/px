@@ -1,0 +1,74 @@
+name: product release
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Validate and build
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test --all-targets
+          python3 scripts/test-installer.py
+          cargo build --release --bin px
+          ./target/release/px --version
+          mkdir artifacts
+          cp target/release/px artifacts/px-linux-${{ matrix.arch }}
+          strip artifacts/px-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: px-linux-${{ matrix.arch }}
+          path: artifacts/*
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: px-linux-*
+          merge-multiple: true
+          path: artifacts
+      - name: Prepare versioned installer and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          if os.environ['RELEASE_TAG'] != 'v' + version:
+              raise SystemExit('Release tag must match Cargo.toml version')
+          script = pathlib.Path('install.sh').read_text()
+          script = re.sub(r'DEFAULT_VERSION="[^"]+"', f'DEFAULT_VERSION="v{version}"', script)
+          pathlib.Path('artifacts/install.sh').write_text(script)
+          PY
+          cd artifacts
+          # Existing x86_64 clients update from the legacy asset name.
+          cp px-linux-x86_64 px
+          sha256sum px px-linux-* install.sh > SHA256SUMS
+      - name: Create draft for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" artifacts/* --verify-tag --draft \
+            --title "px $RELEASE_TAG" --generate-notes

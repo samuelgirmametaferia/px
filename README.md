@@ -8,7 +8,7 @@
 
 [![ci](https://github.com/samuelgirmametaferia/px/actions/workflows/ci.yml/badge.svg)](https://github.com/samuelgirmametaferia/px/actions/workflows/ci.yml)
 [![registry](https://github.com/samuelgirmametaferia/px/actions/workflows/registry-build.yml/badge.svg)](https://github.com/samuelgirmametaferia/px/actions/workflows/registry-build.yml)
-![rust](https://img.shields.io/badge/rust-3.0.0-orange)
+[![version](https://img.shields.io/github/v/tag/samuelgirmametaferia/px?filter=v*)](https://github.com/samuelgirmametaferia/px/tags)
 
 </div>
 
@@ -16,10 +16,9 @@
 
 ![px demo](docs/demo.gif)
 
-`px install <anything>` identifies the actual software project you mean —
-never just a name match — discovers every legitimate way to install it,
-ranks the methods by safety and reliability, and installs the right
-program. Whether it lives in your distro's repos, the AUR, on crates.io,
+`px install <package>` searches configured sources, uses project identity
+where available, ranks installation methods, and calls the matching
+package manager. Whether it lives in your distro's repos, the AUR, on crates.io,
 npm, PyPI, a GitHub release, or behind an official `install.sh`, one
 command handles it.
 
@@ -42,30 +41,36 @@ $ px install agent-code
 
 ## Install
 
-**curl | sh** (the official way):
+**Build from source** (Linux; Rust toolchain required):
 
 ```sh
-curl -fsSL https://github.com/samuelgirmametaferia/px/releases/latest/download/install.sh | sh
+git clone https://github.com/samuelgirmametaferia/px
+cd px
+cargo install --path . --bin px
 ```
 
-**Homebrew** (Linuxbrew / macOS):
+**Prebuilt binaries:** choose a product version (`v…`) on the
+[releases page](https://github.com/samuelgirmametaferia/px/releases).
+Registry releases contain package metadata, not the px executable.
+The v3.1.0 binary is Linux x86_64 only; ARM users should build from source.
+
+## Try it
 
 ```sh
-brew install samuelgirmametaferia/px/px
+px doctor                         # see detected tools and distro
+px --dry-run install ripgrep       # preview an installation
+px search ffmpeg                   # compare available sources
+px install ripgrep                 # install through your package manager
+px path ripgrep                    # find its executable
+px remove ripgrep                  # remove it again
 ```
 
-**From source:**
+For a project checkout, use `px install for ./my-project`. Run
+`px --tutorial` for an interactive introduction. px uses per-user state;
+run it as your normal user and let it request sudo when needed.
 
-```sh
-git clone https://github.com/samuelgirmametaferia/px && cd px && cargo install --path .
-```
-
-Then start here:
-
-```sh
-px --tutorial     # learn it in 2 minutes
-px doctor         # what px sees on your machine
-```
+Bundled distro recipes cover Arch, Debian/Ubuntu, Fedora, and openSUSE.
+Package availability depends on the configured sources and upstream projects.
 
 ## What it does
 
@@ -105,8 +110,9 @@ a dangerous script scan — never fall through.
 ## The upstream registry
 
 Software that isn't in any package manager is indexed in px's own
-registry: BLAKE3-keyed, 4096-shard, CBOR/zstd, verified at 1,000,000
-apps (~16ms warm lookups). Every record pins the exact installer sha256
+registry: BLAKE3-keyed, 4096-shard, CBOR/zstd, benchmarked with 1,000,000
+synthetic apps (~16ms warm lookups). That benchmark is not a count of
+real supported applications. Every record pins the exact installer sha256
 it was validated with — if the live installer serves different bytes, px
 **stops the install**. Discovery runs on GitHub Actions every 6 hours:
 scanning for documented installers, validating candidates in a sandbox
@@ -119,13 +125,15 @@ tombstones so a hijacked name can't take over resolution.
 - px never runs as root; it elevates individual commands via sudo (asked
   before any drawing starts — a prompt behind a spinner is what hangs
   look like)
-- npm install scripts, `curl | sh` installers, and source builds run in a
-  **bubblewrap sandbox** — your system read-only, isolated namespaces
+- supported installation paths use **bubblewrap** when sandboxing is enabled
+  and available. Some paths warn and continue without isolation when bwrap
+  is missing; check `px doctor` before relying on sandboxing.
 - installers are statically scanned first (obfuscation, rc/cron/sudoers
   writes, base64-into-shell, `rm -rf /` = refused)
 - every query has a hard timeout; Ctrl+C exits clean; package-manager
   noise is captured, shown only on failure (`-v` for raw output)
-- all arguments passed directly to child processes — never through a shell
+- package-manager arguments are passed directly to child processes; shell
+  installers are handled separately by the installer checks
 
 ## Any distro
 
@@ -142,4 +150,6 @@ install ffmpeg` prints the exact apt command from any machine.
 Architecture deep-dive: [docs/registry.md](docs/registry.md) ·
 Manual test checklist: [docs/manual-tests.md](docs/manual-tests.md)
 
-MIT license.
+[Contributing](CONTRIBUTING.md) · [Report a bug](https://github.com/samuelgirmametaferia/px/issues/new?template=bug_report.yml)
+
+MIT license (declared in Cargo.toml).

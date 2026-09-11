@@ -92,6 +92,11 @@ pub fn looks_like_project_file(path: &Path) -> bool {
     matches!(
         ext.as_str(),
         "py" | "js"
+            | "mjs"
+            | "cjs"
+            | "jsx"
+            | "tsx"
+            | "zsh"
             | "ts"
             | "c"
             | "h"
@@ -150,6 +155,9 @@ pub fn scan_source_files(root: &Path, max: usize) -> Vec<std::path::PathBuf> {
         ".vscode",
         "coverage",
     ];
+    if max == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for entry in WalkDir::new(root)
         .into_iter()
