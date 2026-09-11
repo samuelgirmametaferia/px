@@ -110,8 +110,9 @@ a dangerous script scan — never fall through.
 ## The upstream registry
 
 Software that isn't in any package manager is indexed in px's own
-registry: BLAKE3-keyed, 4096-shard, CBOR/zstd, verified at 1,000,000
-apps (~16ms warm lookups). Every record pins the exact installer sha256
+registry: BLAKE3-keyed, 4096-shard, CBOR/zstd, benchmarked with 1,000,000
+synthetic apps (~16ms warm lookups). That benchmark is not a count of
+real supported applications. Every record pins the exact installer sha256
 it was validated with — if the live installer serves different bytes, px
 **stops the install**. Discovery runs on GitHub Actions every 6 hours:
 scanning for documented installers, validating candidates in a sandbox
@@ -124,8 +125,9 @@ tombstones so a hijacked name can't take over resolution.
 - px never runs as root; it elevates individual commands via sudo (asked
   before any drawing starts — a prompt behind a spinner is what hangs
   look like)
-- npm install scripts, `curl | sh` installers, and source builds run in a
-  **bubblewrap sandbox** — your system read-only, isolated namespaces
+- supported installation paths use **bubblewrap** when sandboxing is enabled
+  and available. Some paths warn and continue without isolation when bwrap
+  is missing; check `px doctor` before relying on sandboxing.
 - installers are statically scanned first (obfuscation, rc/cron/sudoers
   writes, base64-into-shell, `rm -rf /` = refused)
 - every query has a hard timeout; Ctrl+C exits clean; package-manager
